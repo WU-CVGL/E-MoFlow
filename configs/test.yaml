@@ -1,3 +1,11 @@
-data_path: "/home/liwenpu-cvgl/events/002000.txt"
-gpu: 0
-pe: 0
+data:
+  dataset_name: simple_test
+  data_path: /home/liwenpu-cvgl/events
+  hight: 480
+  weight: 640
+  color_event: False
+  threshold: 0.2
+
+model:
+  pos_encode: True
+  multires: 10  
