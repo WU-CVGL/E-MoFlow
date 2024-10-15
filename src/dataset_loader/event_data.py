@@ -190,7 +190,6 @@ class EventSlicer:
             assert events[dset_str].size == events['t'].size
         return events
 
-
     @staticmethod
     def get_conservative_window_ms(ts_start_us: int, ts_end_us) -> Tuple[int, int]:
         """Compute a conservative time window of time with millisecond resolution.
@@ -209,7 +208,6 @@ class EventSlicer:
         window_start_ms = math.floor(ts_start_us/1000)
         window_end_ms = math.ceil(ts_end_us/1000)
         return window_start_ms, window_end_ms
-
 
     @staticmethod
     @numba.jit(nopython=True)
@@ -270,7 +268,6 @@ class EventSlicer:
         if idx_end > 0:
             assert time_array[idx_end - 1] < time_end_us
         return idx_start, idx_end
-
 
     def ms2idx(self, time_ms: int) -> int:
         assert time_ms >= 0
