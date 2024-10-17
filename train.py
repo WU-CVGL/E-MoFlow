@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import torch 
 import random
 import logging
@@ -51,8 +52,18 @@ if __name__ == "__main__":
 
     # load dataset 
     dataset_name = data_config.pop('dataset_name')
+    dataloader_config = data_config.pop('loader')
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
- 
+    loader = dataset_manager.create_loader(dataset, dataloader_config)
+
+    num_epochs = 1
+    for i in range(num_epochs):
+        for sample in tqdm(loader, desc=f"Tranning {i} epoch", leave=True):
+            sample["events"] = sample["events"].float().to(device)
+            print(sample["events"].dtype)
+            time.sleep(1)
+            # logger.info(f"data(x y t p): {sample["events"]}")
+    # print(dataset.data_num)
     # create eventstream
     # eventstream = EventStreamData(
     #     data_path = config["data_path"], t_start = 0, t_end = 1, 

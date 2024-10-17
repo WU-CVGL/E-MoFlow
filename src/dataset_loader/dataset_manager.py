@@ -1,13 +1,19 @@
+import torch
 import logging
+import numpy as np
 
-from .simple_test.reader import SimpleTest
+from torch.utils.data import DataLoader
+
+from .base import DatasetBase
+from .simple_test.reader import SimpleTestDataset
+from .simple_test.provider import SimpleTestDataProvider
 
 logger = logging.getLogger(__name__)
 
 def get_dataset(dataset_name, data_config):
-    if dataset_name == "simple_test":
-        logger.info(f"Use simple_test datset.")
-        return SimpleTest(**data_config)
+    if dataset_name == "SimpleTest":
+        logger.info(f"Use SimpleTest datset.")
+        return SimpleTestDataset(**data_config)
     elif dataset_name == "DSEC":
         pass
     elif dataset_name == "MVSEC":
@@ -19,3 +25,13 @@ def get_dataset(dataset_name, data_config):
     else:
         logger.error(f"Invaild dataset: {dataset_name}")
         raise ValueError(f"Invaild dataset: {dataset_name}")
+    
+def create_loader(dataset: DatasetBase, config: dict):
+    if dataset.name == "SimpleTest":
+        dataprovider = SimpleTestDataProvider(dataset)
+        logger.info(f"The loader for {dataset.name} is created.")
+    else:
+        logger.error(f"Can't creat loader for {dataset.name}.")
+        raise ValueError(f"Can't creat loader for {dataset.name}.")        
+    
+    return DataLoader(dataprovider, batch_size=config["batch_size"], num_workers=config["num_workers"], shuffle=config["shuffle"])
