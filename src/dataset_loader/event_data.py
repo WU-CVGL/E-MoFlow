@@ -56,6 +56,18 @@ class EventData():
                 out_tensor += out_sparse.to_dense().to(self.device)
                 self.event_image = out_tensor.cpu().numpy()
         return self.event_image
+    
+    def to_array(self) -> None:
+        if isinstance(self.events, np.ndarray):
+            pass
+        elif isinstance(self.events, torch.Tensor):
+            self.events = self.events.cpu().numpy() if self.events.is_cuda else self.events.numpy()
+
+    def to_tensor(self) -> None:
+        if isinstance(self.events, np.ndarray):
+            self.events = torch.from_numpy(self.events).to(self.device)
+        elif isinstance(self.events, torch.Tensor):
+            pass
 
 class EventStreamData():
     def __init__(self, data_path, t_start, t_end, H, W, color_event, event_thresh, device: torch.device):
