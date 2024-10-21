@@ -3,9 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.model import embedder
+from typing import Dict
 
 class EventFlowINR(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=63, output_ch=3, skips=[4]):
+    def __init__(self, D=8, W=256, input_ch=63, output_ch=2, skips=[4]):
         super().__init__()
         self.D = D
         self.W = W
@@ -20,14 +21,19 @@ class EventFlowINR(nn.Module):
 
         self.output_linear = nn.Linear(W, output_ch)
 
-    def forward(self, coord_xyt: torch.Tensor, args):
+        for linear in self.coord_linears:
+            nn.init.xavier_uniform_(linear.weight)
+            nn.init.zeros_(linear.bias)
+        nn.init.xavier_uniform_(self.output_linear.weight)
+        nn.init.zeros_(self.output_linear.bias)
+
+    def forward(self, coord_xyt: torch.Tensor, config: Dict):
         # create positional encoding
-        embed_fn, input_ch = embedder.get_embedder(args, args.multires, args.pe)
+        embed_fn, input_ch = embedder.get_embedder(config)
 
         # forward positional encoding
         coord_xyt_flat = torch.reshape(coord_xyt, [-1, coord_xyt.shape[-1]])
         embedded_coord_xyt = embed_fn(coord_xyt_flat)
-
 
         # input_pts, input_views = torch.split(embedded, [self.input_ch, self.input_ch_views], dim=-1)
         h = embedded_coord_xyt
@@ -36,12 +42,10 @@ class EventFlowINR(nn.Module):
             h = F.relu(h)
             if i in self.skips:
                 h = torch.cat([embedded_coord_xyt, h], -1)
-
-        
+       
         outputs = self.output_linear(h)
-
+        outputs = torch.sigmoid(outputs)
         outputs = torch.reshape(outputs, list(coord_xyt.shape[:-1]) + [outputs.shape[-1]])
-
         return outputs
 
 # class NeRF(nn.Module):

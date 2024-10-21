@@ -1,6 +1,10 @@
 import torch
 from torch import nn
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class Embedder:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -33,20 +37,17 @@ class Embedder:
     def embed(self, inputs):
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
-
-def get_embedder(args, multires, i=0):
-    if i == -1:
+def get_embedder(config):
+    if config["pos_encode"] == False:
         return nn.Identity(), 3
-
     embed_kwargs = {
         'include_input': True,
         'input_dims': 3,
-        'max_freq_log2': multires - 1,
-        'num_freqs': multires,
+        'max_freq_log2': config["multires"] - 1,
+        'num_freqs': config["multires"],
         'log_sampling': True,
         'periodic_fns': [torch.sin, torch.cos],
     }
-
     embedder_obj = Embedder(**embed_kwargs)
     embed = lambda x, eo=embedder_obj: eo.embed(x)
     return embed, embedder_obj.out_dim
