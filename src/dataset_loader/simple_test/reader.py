@@ -9,6 +9,9 @@ from ..base import DatasetBase
 logger = logging.getLogger(__name__)
 
 class SimpleTestDataset(DatasetBase):
+
+    NAME = "SimpleTest"
+
     def __init__(self, data_path: Path, threshold: float, range: list,
                  hight: int, weight: int, color_event: bool = False) -> None:
         self.data_path = Path(data_path)
@@ -34,11 +37,11 @@ class SimpleTestDataset(DatasetBase):
         start_time, end_time = first_frame_events[0][0], last_frame_events[-1][0]
         return start_time, end_time
     
-    # @property
+    @property
     def data_num(self) -> int:
         return len(self.txt_files_path)
 
-    # @property
+    @property
     def name(self) -> str:
-        return SimpleTestDataset.__name__
+        return SimpleTestDataset.NAME
        

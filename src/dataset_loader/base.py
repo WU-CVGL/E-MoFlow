@@ -8,11 +8,12 @@ logger = logging.getLogger(__name__)
 class DatasetBase(object):
     def __init__(self):
         pass
-    
+
     @property
     @abc.abstractmethod
     def name(self):
         raise NotImplementedError
+    
     @property
     @abc.abstractmethod
     def data_num(self):
