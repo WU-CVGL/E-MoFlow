@@ -11,8 +11,9 @@ import numpy as np
 from tqdm import tqdm
 from src import load_config
 from src.model.inr import EventFlowINR
+from src.model.warp import NeuralODEWarp
 from src.dataset_loader import dataset_manager
-from src.dataset_loader.event_data import EventStreamData
+# from src.dataset_loader.event_data import EventStreamData
 
 # log
 logging.basicConfig(
@@ -56,12 +57,42 @@ if __name__ == "__main__":
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
     loader = dataset_manager.create_loader(dataset, dataloader_config)
 
+    # create model
+    flow_field = EventFlowINR(model_config).to(device)
+    warpper = NeuralODEWarp(flow_field, device=device)
+
+    # train
     num_epochs = 1
     for i in range(num_epochs):
         for sample in tqdm(loader, desc=f"Tranning {i} epoch", leave=True):
-            sample["events"] = sample["events"].float().to(device)
-            print(sample["events"].dtype)
-            time.sleep(1)
+            # get batch data
+            events = sample["events"].squeeze(0)
+            events_norm = sample["events_norm"].squeeze(0)
+            timestamps = sample["timestamps"].squeeze(0)
+            batch_txy = events_norm[:, :-1].float().to(device)
+
+            # get t_ref
+            ref = warpper.get_reference_time(batch_txy)
+            warpper.warp_events(batch_txy, **ref)
+            # batch_xy0, batch_t0 = batch_txy[:, 1:], batch_txy[:, 0] 
+            # t_ref = torch.max(batch_t0) + (1 - torch.max(batch_t0)) * torch.rand(1).to(device)
+            # for xy0, t0 in zip(batch_xy0, batch_t0):
+            #     distance = torch.abs(t_ref - t0)
+            #     num_eval = max(2, int(distance / 1))  
+            #     eval_t = torch.linspace(t0.item(), t_ref.item(), num_eval).to(device)
+            #     # print(t0.shape)
+            #     pred_y = torchdiffeq.odeint_adjoint(flow_field, xy0, eval_t).to(device)
+            #     print(pred_y.device)
+            # print("1 batch down")
+                # print(xy0.shape)
+            # print(f"max: {torch.max(t_0).item()}")
+            # print(f"t_ref: {batch_t0[-1].item()}")
+            # print(value_0[0][0])
+            # pred_y = torchdiffeq.odeint_adjoint(flow_field, )
+            # out = flow_field.forward(xyt_coordinate, model_config)
+            # print(out.shape)
+            # logger.info(f"start: {txy[0][0].tolist()}, end: {txy[-1][0].tolist()}")
+            # time.sleep(0.5)
             # logger.info(f"data(x y t p): {sample["events"]}")
     # print(dataset.data_num)
     # create eventstream
@@ -75,6 +106,6 @@ if __name__ == "__main__":
     # test_coord = torch.tensor([[1,2,3],[4,5,6],[7,8,9],[10,11,12]]).to(device)
     # tensorhue.viz(test_coord.cpu().detach().numpy())
     # neu_flow_field = EventFlowINR().to(device)
-    # out = neu_flow_field.forward(test_coord, args)
+    # out = neu_flow_field.forward(test_coord, model_config)
     # print(out)
     # tensorhue.viz(out.cpu().detach().numpy())
