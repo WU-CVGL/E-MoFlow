@@ -6,8 +6,9 @@ from src.model import embedder
 from typing import Dict
 
 class EventFlowINR(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=63, output_ch=2, skips=[4]):
+    def __init__(self, config, D=8, W=256, input_ch=63, output_ch=2, skips=[4]):
         super().__init__()
+        self.config = config
         self.D = D
         self.W = W
         self.input_ch = input_ch
@@ -27,12 +28,12 @@ class EventFlowINR(nn.Module):
         nn.init.xavier_uniform_(self.output_linear.weight)
         nn.init.zeros_(self.output_linear.bias)
 
-    def forward(self, coord_xyt: torch.Tensor, config: Dict):
+    def forward(self, coord_txy: torch.Tensor):
         # create positional encoding
-        embed_fn, input_ch = embedder.get_embedder(config)
+        embed_fn, input_ch = embedder.get_embedder(self.config)
 
         # forward positional encoding
-        coord_xyt_flat = torch.reshape(coord_xyt, [-1, coord_xyt.shape[-1]])
+        coord_xyt_flat = torch.reshape(coord_txy, [-1, coord_txy.shape[-1]])
         embedded_coord_xyt = embed_fn(coord_xyt_flat)
 
         # input_pts, input_views = torch.split(embedded, [self.input_ch, self.input_ch_views], dim=-1)
@@ -44,8 +45,8 @@ class EventFlowINR(nn.Module):
                 h = torch.cat([embedded_coord_xyt, h], -1)
        
         outputs = self.output_linear(h)
-        outputs = torch.sigmoid(outputs)
-        outputs = torch.reshape(outputs, list(coord_xyt.shape[:-1]) + [outputs.shape[-1]])
+        # outputs = torch.sigmoid(outputs)
+        outputs = torch.reshape(outputs, list(coord_txy.shape[:-1]) + [outputs.shape[-1]])
         return outputs
 
 # class NeRF(nn.Module):
