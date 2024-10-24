@@ -88,10 +88,6 @@ class EventStreamData():
         elif file_extension == ".npy":
             events = np.load(self.data_path, allow_pickle=True)
 
-        events[: ,0] = events[:, 0] - events[0, 0]
-        events = events[(events[:, 0] > self.t_start) & (events[:, 0] < self.t_end)]
-        events[: ,0] = (events[: ,0] - self.t_start) / (self.t_end - self.t_start) * 2 - 1 # Normalize event timestampes to [-1, 1]
-
         if self.H > self.W:
             self.H, self.W = self.W, self.H
             events = events[:, [0, 2, 1, 3]]
