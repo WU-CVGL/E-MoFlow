@@ -23,16 +23,17 @@ class NeuralODEWarp:
             output = {"t_ref": t_ref_2, "dir": "forward"}
         return output
 
-    def warp_events(self, events: torch.Tensor, t_ref, dir):
-        batch_t0 = events[:, 0]
-        print(len(t_ref - batch_t0))
-        pred_flow = self.flow_calculator.forward(events)
+    def warp_events(self, batch_txy: torch.Tensor, t_ref, dir):
+        batch_t0 = batch_txy[:, 0]  
+        warped_batch_txy = batch_txy.clone()
+        t_step: torch.Tensor = ((t_ref - batch_t0) / self.num_step).unsqueeze(1)
+        # print(warped_events.dtype, t_step.dtype)
+        for _ in range(self.num_step):
+            pred_flow = self.flow_calculator.forward(warped_batch_txy)
+            warped_batch_txy[:, 1:] += pred_flow * t_step
+            warped_batch_txy[:, 0] += t_step.squeeze()
+        return warped_batch_txy
 
-
-        # print(pred_flow.shape)
-
-    def make_iwe():
-        pass
 
 
 
