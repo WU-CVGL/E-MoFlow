@@ -1,19 +1,26 @@
 import os
 import sys
 import time
-import torch 
 import random
 import logging
 import tensorhue
-import torchdiffeq
+import cv2 as cv
 import numpy as np
 
+import torch 
+import torch.optim as optim
+
 from tqdm import tqdm
+from scipy.ndimage import zoom
+
 from src import load_config
+from src.loss import focus
+from src.wandb import WandbLogger
 from src.model.inr import EventFlowINR
 from src.model.warp import NeuralODEWarp
+from src.event_data import EventStreamData
 from src.dataset_loader import dataset_manager
-# from src.dataset_loader.event_data import EventStreamData
+from src.event_image_converter import EventImageConverter
 
 # log
 logging.basicConfig(
@@ -44,6 +51,9 @@ if __name__ == "__main__":
     data_config = config["data"]
     model_config = config["model"]
 
+    # wandb
+    wandb_logger = WandbLogger(config)
+
     # detect cuda
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
     logger.info(f"Use device: {device}")
@@ -57,12 +67,19 @@ if __name__ == "__main__":
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
     loader = dataset_manager.create_loader(dataset, dataloader_config)
 
+    # event2img converter
+    image_size = (data_config["weight"], data_config["hight"])
+    converter = EventImageConverter(image_size)
+
     # create model
     flow_field = EventFlowINR(model_config).to(device)
     warpper = NeuralODEWarp(flow_field, device=device)
 
+    # create optimizer
+    optimizer = optim.Adam(flow_field.parameters(), lr=1e-6)
+
     # train
-    num_epochs = 1
+    num_epochs = 1000
     for i in range(num_epochs):
         for sample in tqdm(loader, desc=f"Tranning {i} epoch", leave=True):
             # get batch data
@@ -73,7 +90,32 @@ if __name__ == "__main__":
 
             # get t_ref
             ref = warpper.get_reference_time(batch_txy)
-            warpper.warp_events(batch_txy, **ref)
+
+            # odewarp 
+            warped_batch_txy = warpper.warp_events(batch_txy, **ref)
+
+            # create image warped event           
+            polarity = events[:, 3].unsqueeze(1).to(device)
+            warped_events_xytp = torch.cat((warped_batch_txy[:, [1,2,0]], polarity), dim=1)
+            warped_events_xytp[:, :2] *= torch.Tensor(image_size).to(device)
+            iwe = converter.create_iwe(warped_events_xytp)
+
+            var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
+            grad_loss = focus.calculate_focus_loss(iwe, loss_type='gradient_magnitude', norm='l1')
+            total_loss = var_loss + grad_loss
+            wandb_logger.write("train_loss", total_loss.item())
+            # print(total_loss.item())
+
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+            wandb_logger.update_buffer()
+        print(total_loss.item())
+            # iwe_numpy = iwe.T.detach().cpu().numpy()
+            # tensorhue.viz(zoom(iwe_numpy, (1/8,1/8)))
+            # cv.imwrite(f"iwe_{j}.png", (iwe.T.detach().cpu().numpy()) * 255)
+            # print(warped_events[0][0].item(), warped_events[-1][0].item(), ref["t_ref"].item())
             # batch_xy0, batch_t0 = batch_txy[:, 1:], batch_txy[:, 0] 
             # t_ref = torch.max(batch_t0) + (1 - torch.max(batch_t0)) * torch.rand(1).to(device)
             # for xy0, t0 in zip(batch_xy0, batch_t0):
@@ -95,17 +137,19 @@ if __name__ == "__main__":
             # time.sleep(0.5)
             # logger.info(f"data(x y t p): {sample["events"]}")
     # print(dataset.data_num)
+
+
+
     # create eventstream
     # eventstream = EventStreamData(
-    #     data_path = config["data_path"], t_start = 0, t_end = 1, 
+    #     data_path = "/home/liwenpu-cvgl/events/000550.txt", t_start = 0, t_end = 1, 
     #     H=480, W=640, color_event=False, event_thresh=1, device=device
     # )
     # eventstream.stack_event_images(1)
     # eventstream.visuailize_event_images()
 
-    # test_coord = torch.tensor([[1,2,3],[4,5,6],[7,8,9],[10,11,12]]).to(device)
-    # tensorhue.viz(test_coord.cpu().detach().numpy())
-    # neu_flow_field = EventFlowINR().to(device)
-    # out = neu_flow_field.forward(test_coord, model_config)
-    # print(out)
-    # tensorhue.viz(out.cpu().detach().numpy())
+    # eventstream.events = eventstream.events[:, [1,2,0,3]]
+    # iwe = converter.create_iwe(eventstream.events)
+    # # print(iwe.shape)
+    # cv.imwrite(f"iwe.png", iwe.T)
+    # tensorhue.viz(zoom(iwe.T, (1/8,1/8)))
