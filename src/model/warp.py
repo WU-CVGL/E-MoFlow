@@ -8,7 +8,7 @@ class NeuralODEWarp:
     def __init__(self, flow_inr: EventFlowINR, device: torch.device) -> None:
         self.flow_calculator = flow_inr       # calculate dy/dt
         self.device = device
-        self.num_step = 10
+        self.num_step = 50
 
     def get_reference_time(self, events: torch.Tensor) -> dict:
         batch_xy0, batch_t0 = events[:, 1:], events[:, 0]

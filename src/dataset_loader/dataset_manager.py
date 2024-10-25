@@ -31,7 +31,8 @@ def create_loader(dataset: DatasetBase, config: dict):
         dataprovider = SimpleTestDataProvider(dataset)
         logger.info(f"The loader for {dataset.name} is created.")
     else:
-        logger.error(f"Can't creat loader for {dataset.name}.")
-        raise ValueError(f"Can't creat loader for {dataset.name}.")        
+        e = f"Can't creat loader for {dataset.name}."
+        logger.error(e)
+        raise ValueError(e)        
     
     return DataLoader(dataprovider, batch_size=config["batch_size"], num_workers=config["num_workers"], shuffle=config["shuffle"])

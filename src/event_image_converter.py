@@ -93,7 +93,7 @@ class EventImageConverter(object):
         self,
         events: np.ndarray,
         method: str = "bilinear_vote",
-        weight: Union[float, np.ndarray] = 1.0,
+        weight: Union[float, np.ndarray] = 255.0,
         sigma: int = 1,
     ) -> np.ndarray:
         """Create image of events for numpy array.
