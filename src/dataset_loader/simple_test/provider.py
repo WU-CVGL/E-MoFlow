@@ -19,10 +19,12 @@ class SimpleTestDataProvider(Dataset):
         self.t_start = dataset.event_start_time
         self.t_end = dataset.event_end_time
         self.duration = dataset.duration
+        self.batch_range = dataset.batch_range
 
     def get_batch_event_data(self, idx) -> Dict:
-        event_file_path = self.dataset.txt_files_path[idx]
-        events = torch.from_numpy(np.loadtxt(event_file_path))
+        event_file_paths = self.dataset.txt_files_path[idx:idx+self.batch_range]
+        event_data_list = [np.loadtxt(file) for file in event_file_paths]
+        events = torch.from_numpy(np.vstack(event_data_list))
 
         mask = (0 <= events[:, 1]) & (events[:, 1] < self.W) & \
                 (0 <= events[:, 2]) & (events[:, 2] < self.H)

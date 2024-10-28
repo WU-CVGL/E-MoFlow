@@ -12,24 +12,25 @@ class SimpleTestDataset(DatasetBase):
 
     NAME = "SimpleTest"
 
-    def __init__(self, data_path: Path, threshold: float, range: list,
-                 hight: int, weight: int, color_event: bool = False) -> None:
+    def __init__(self, data_path: Path, threshold: float, sequence_length: list,
+                 hight: int, weight: int, batch_range: int, color_event: bool = False) -> None:
         self.data_path = Path(data_path)
         self.threshold = threshold
         self.hight, self.weight = hight, weight
         self.color_event = color_event
-        self.range_indices = range
+        self.sequence_indices = sequence_length
+        self.batch_range = batch_range
 
-        self.txt_files_path = self._load_txt_files_path(self.data_path, self.range_indices)
+        self.txt_files_path = self._load_txt_files_path(self.data_path, self.sequence_indices)
         self.event_start_time, self.event_end_time = self._get_event_duration(self.txt_files_path)
         self.duration = self.event_end_time - self.event_start_time
         logger.info(f"Event stream duration: {self.duration} sec")
 
-    def _load_txt_files_path(self, dictionary, range_indices) -> str:
+    def _load_txt_files_path(self, dictionary, sequence_indices) -> str:
         txt_files = [f for f in os.listdir(dictionary) if f.endswith('.txt') and f[:-4].isdigit()]
         sorted_txt_files = sorted(txt_files, key=lambda x: int(x[:-4]))
         sorted_txt_files_path = [os.path.join(dictionary, f) for f in sorted_txt_files]
-        start, end = range_indices
+        start, end = sequence_indices
         return sorted_txt_files_path[start:end+1]
     
     def _get_event_duration(self, files) -> float:
