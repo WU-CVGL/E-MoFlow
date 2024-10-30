@@ -38,7 +38,7 @@ class SimpleTestDataProvider(Dataset):
         events_norm[:, 2] = events[:, 2] / self.H
 
         batch_data : Dict[str, Any] = {
-            "events": events,
+            "events": events_sorted,
             "events_norm": events_norm,
             "timestamps": events[:, 0],
         }
