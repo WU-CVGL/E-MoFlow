@@ -50,6 +50,7 @@ if __name__ == "__main__":
     config = load_config.load_yaml_config(args.config)
     data_config = config["data"]
     model_config = config["model"]
+    warp_config = config["warp"]
 
     # wandb
     wandb_logger = WandbLogger(config)
@@ -91,13 +92,18 @@ if __name__ == "__main__":
 
     # create model
     flow_field = EventFlowINR(model_config).to(device)
-    warpper = NeuralODEWarp(flow_field, device=device)
+    warpper = NeuralODEWarp(flow_field, device, **warp_config)
 
     # create optimizer
     optimizer = optim.Adam(flow_field.parameters(), lr=1e-6)
 
+    # display origin test data
+    with torch.no_grad():
+        iwe = converter.create_iwe(test_events_sorted[:, [1,2,0,3]])
+        wandb_logger.write_img("iwe", iwe.T.detach().cpu().numpy() * 255)
+
     # train
-    num_epochs = 100
+    num_epochs = 200
     for i in range(num_epochs):
         for idx, sample in enumerate(tqdm(loader, desc=f"Tranning {i} epoch", leave=True)):
             # get batch data
@@ -110,7 +116,7 @@ if __name__ == "__main__":
             # cv.imwrite(f"iwe_{idx}.png", (iwe.T.detach().cpu().numpy()) * 255)
 
             # get t_ref
-            ref = warpper.get_reference_time(batch_txy)
+            ref = warpper.get_reference_time(batch_txy, warp_config["tref_setting"])
 
             # odewarp 
             warped_batch_txy = warpper.warp_events(batch_txy, ref)
@@ -143,7 +149,7 @@ if __name__ == "__main__":
 
         # test
         with torch.no_grad():
-            test_ref = warpper.get_reference_time(test_batch_txy)
+            test_ref = warpper.get_reference_time(test_batch_txy, "max")
             test_warped_batch_txy = warpper.warp_events(test_batch_txy, test_ref)
             # create image warped event           
             test_polarity = test_events_sorted[:, 3].unsqueeze(1).to(device)
