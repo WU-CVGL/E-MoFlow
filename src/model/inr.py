@@ -6,7 +6,7 @@ from src.model import embedder
 from typing import Dict
 
 class EventFlowINR(nn.Module):
-    def __init__(self, config, D=8, W=256, input_ch=63, output_ch=2, skips=[4]):
+    def __init__(self, config, D=8, W=256, input_ch=3, output_ch=2, skips=[4]):
         super().__init__()
         self.config = config
         self.D = D
@@ -34,8 +34,9 @@ class EventFlowINR(nn.Module):
 
         # forward positional encoding
         coord_xyt_flat = torch.reshape(coord_txy, [-1, coord_txy.shape[-1]])
-        embedded_coord_xyt = embed_fn(coord_xyt_flat)
-
+        # embedded_coord_xyt = embed_fn(coord_xyt_flat)
+        embedded_coord_xyt = coord_xyt_flat.clone()
+        
         # input_pts, input_views = torch.split(embedded, [self.input_ch, self.input_ch_views], dim=-1)
         h = embedded_coord_xyt
         for i, l in enumerate(self.coord_linears):

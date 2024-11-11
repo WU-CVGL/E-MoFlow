@@ -39,7 +39,8 @@ class Embedder:
 
 def get_embedder(config):
     if config["pos_encode"] == False:
-        return nn.Identity(), 3
+        copy = lambda x: x.clone()
+        return copy, 3
     embed_kwargs = {
         'include_input': True,
         'input_dims': 3,
