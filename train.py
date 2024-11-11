@@ -8,6 +8,7 @@ import cv2 as cv
 import numpy as np
 
 import torch 
+import torch.nn as nn
 import torch.optim as optim
 
 from tqdm import tqdm
@@ -51,6 +52,7 @@ if __name__ == "__main__":
     data_config = config["data"]
     model_config = config["model"]
     warp_config = config["warp"]
+    optimizer_config = config["optimizer"]
 
     # wandb
     wandb_logger = WandbLogger(config)
@@ -95,7 +97,7 @@ if __name__ == "__main__":
     warpper = NeuralODEWarp(flow_field, device, **warp_config)
 
     # create optimizer
-    optimizer = optim.Adam(flow_field.parameters(), lr=1e-6)
+    optimizer = optim.Adam(flow_field.parameters(), lr=1e-4)
 
     # display origin test data
     with torch.no_grad():
@@ -103,7 +105,10 @@ if __name__ == "__main__":
         wandb_logger.write_img("iwe", iwe.T.detach().cpu().numpy() * 255)
 
     # train
-    num_epochs = 200
+    num_epochs = 1000    
+    decay_steps = 1
+    decay_factor = (1e-6 / 1e-4) ** (1 / (num_epochs / decay_steps))
+    start_time = time.time()
     for i in range(num_epochs):
         for idx, sample in enumerate(tqdm(loader, desc=f"Tranning {i} epoch", leave=True)):
             # get batch data
@@ -124,13 +129,15 @@ if __name__ == "__main__":
             # create image warped event           
             polarity = events[:, 3].unsqueeze(1).to(device)
             warped_events_xytp = torch.cat((warped_batch_txy[:, [1,2,0]], polarity), dim=1)
-            warped_events_xytp[:, :2] *= torch.Tensor(image_size).to(device)
+            with torch.no_grad():
+                warped_events_xytp[:, :2] *= torch.Tensor(image_size).to(device)
             iwe = converter.create_iwe(warped_events_xytp)
             
             # loss
-            var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
+            var_loss = torch.Tensor([0]).to(device)
+            # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
             grad_loss = focus.calculate_focus_loss(iwe, loss_type='gradient_magnitude', norm='l1')
-            total_loss = var_loss + grad_loss
+            total_loss = - (grad_loss + var_loss)
             wandb_logger.write("var_loss", var_loss.item())
             wandb_logger.write("grad_loss", grad_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
@@ -142,21 +149,31 @@ if __name__ == "__main__":
 
             # log
             wandb_logger.update_buffer()
-        # print(total_loss.item())
+
         tqdm.write(
             f"[LOG] Epoch {i} Total Loss: {total_loss.item()}, Var Loss: {var_loss.item()}, Grad Loss: {grad_loss.item()},"
         )
 
+        # update learning rate
+        for param_group in optimizer.param_groups:
+            param_group['lr'] *= decay_factor
+        wandb_logger.write("learing_rate", param_group['lr'])
+
         # test
-        with torch.no_grad():
-            test_ref = warpper.get_reference_time(test_batch_txy, "max")
-            test_warped_batch_txy = warpper.warp_events(test_batch_txy, test_ref)
-            # create image warped event           
-            test_polarity = test_events_sorted[:, 3].unsqueeze(1).to(device)
-            test_warped_events_xytp = torch.cat((test_warped_batch_txy[:, [1,2,0]], test_polarity), dim=1)
-            test_warped_events_xytp[:, :2] *= torch.Tensor(image_size).to(device)
-            iwe = converter.create_iwe(test_warped_events_xytp)
-            wandb_logger.write_img("iwe", iwe.T.detach().cpu().numpy() * 255)
+        if i % 10 == 0:
+            with torch.no_grad():
+                test_ref = warpper.get_reference_time(test_batch_txy, "max")
+                test_warped_batch_txy = warpper.warp_events(test_batch_txy, test_ref)
+                # create image warped event           
+                test_polarity = test_events_sorted[:, 3].unsqueeze(1).to(device)
+                test_warped_events_xytp = torch.cat((test_warped_batch_txy[:, [1,2,0]], test_polarity), dim=1)
+                test_warped_events_xytp[:, :2] *= torch.Tensor(image_size).to(device)
+                iwe = converter.create_iwe(test_warped_events_xytp)
+                wandb_logger.write_img("iwe", iwe.T.detach().cpu().numpy() * 255)
+
+    end_time = time.time()
+    training_time = end_time - start_time
+    logger.info(f'Training Time: {training_time:.2f} seconds')
 
             # iwe_numpy = iwe.T.detach().cpu().numpy()
             # tensorhue.viz(zoom(iwe_numpy, (1/8,1/8)))
