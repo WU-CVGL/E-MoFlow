@@ -11,7 +11,7 @@ def calculate_focus_loss(iwe: torch.Tensor, loss_type: str = 'variance',
         val = calculate_gradient_magnitude(iwe, norm=norm)
     else:
         raise ValueError  
-    return -val
+    return val
 
 def calculate_image_variance(iwe):
     variances = torch.var(iwe)
