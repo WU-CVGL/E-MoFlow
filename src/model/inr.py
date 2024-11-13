@@ -34,8 +34,8 @@ class EventFlowINR(nn.Module):
 
         # forward positional encoding
         coord_xyt_flat = torch.reshape(coord_txy, [-1, coord_txy.shape[-1]])
-        # embedded_coord_xyt = embed_fn(coord_xyt_flat)
-        embedded_coord_xyt = coord_xyt_flat.clone()
+        embedded_coord_xyt = embed_fn(coord_xyt_flat)
+        # embedded_coord_xyt = coord_xyt_flat.clone()
         
         # input_pts, input_views = torch.split(embedded, [self.input_ch, self.input_ch_views], dim=-1)
         h = embedded_coord_xyt
