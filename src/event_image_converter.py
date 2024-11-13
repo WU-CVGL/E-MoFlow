@@ -48,7 +48,7 @@ class EventImageConverter(object):
         self.image_size = tuple(i + p for i, p in zip(self.image_size, self.outer_padding))
 
     # Higher layer functions
-    def create_iwe(
+    def create_iwes(
         self,
         events: NUMPY_TORCH,
         method: str = "bilinear_vote",
@@ -65,12 +65,17 @@ class EventImageConverter(object):
             NUMPY_TORCH: [(b,) H, W]
         """
         if is_numpy(events):
-            return self.create_image_from_events_numpy(events, method, sigma=sigma)
+            iwes = self.create_image_from_events_numpy(events, method, sigma=sigma)
         elif is_torch(events):
-            return self.create_image_from_events_tensor(events, method, sigma=sigma)
-        e = f"Non-supported type of events. {type(events)}"
-        logger.error(e)
-        raise RuntimeError(e)
+            iwes = self.create_image_from_events_tensor(events, method, sigma=sigma)
+        else:
+            e = f"Non-supported type of events. {type(events)}"
+            logger.error(e)
+            raise RuntimeError(e)
+        
+        if len(iwes.shape) == 2:
+            iwes = iwes[None]
+        return iwes
 
     def create_eventmask(self, events: NUMPY_TORCH) -> NUMPY_TORCH:
         """Create mask image where at least one event exists.

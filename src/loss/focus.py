@@ -3,24 +3,24 @@ import torch.nn.functional as F
 
 EPS = 1e-9
 
-def calculate_focus_loss(iwe: torch.Tensor, loss_type: str = 'variance',
+def calculate_focus_loss(iwes: torch.Tensor, loss_type: str = 'variance',
                          norm: str = 'l2'):
     if loss_type == 'variance':
-        val = calculate_image_variance(iwe)
+        val = calculate_image_variance(iwes)
     elif loss_type == 'gradient_magnitude':
-        val = calculate_gradient_magnitude(iwe, norm=norm)
+        val = calculate_gradient_magnitude(iwes, norm=norm)
     else:
         raise ValueError  
     return val
 
-def calculate_image_variance(iwe):
-    variances = torch.var(iwe)
-    return variances
+def calculate_image_variance(iwes):
+    variances = torch.var(iwes, dim=(1, 2))
+    return torch.mean(variances)
 
-def calculate_gradient_magnitude(iwe, norm='l2'):
-    if len(iwe.shape) == 3:
-        iwe = iwe[:, None]
-    dx, dy = gradient(iwe)
+def calculate_gradient_magnitude(iwes, norm='l2'):
+    if len(iwes.shape) == 3:
+        iwes = iwes[:, None]
+    dx, dy = gradient(iwes)
     if norm == 'l2':
         return torch.mean(torch.square(dx) + torch.square(dy))
     elif norm == 'l1':
@@ -79,12 +79,11 @@ def gradient(a: torch.Tensor):
                              dtype=a.dtype,
                              device=a.device).view(1, 1, 3, 3)
 
-    a = a.view(1, 1, *a.shape)
-    # channels = a.shape[1]
-    # kernel_x = kernel_x.repeat(channels, 1, 1, 1)
-    # kernel_y = kernel_y.repeat(channels, 1, 1, 1)
+    channels = a.shape[1]
+    kernel_x = kernel_x.repeat(channels, 1, 1, 1)
+    kernel_y = kernel_y.repeat(channels, 1, 1, 1)
 
     grad_x = F.conv2d(a, kernel_x, padding=1)
     grad_y = F.conv2d(a, kernel_y, padding=1)
 
-    return grad_x.squeeze(), grad_y.squeeze()
+    return grad_x, grad_y
