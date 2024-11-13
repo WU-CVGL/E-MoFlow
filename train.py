@@ -117,9 +117,7 @@ if __name__ == "__main__":
             events_norm = sample["events_norm"].squeeze(0)
             timestamps = sample["timestamps"].squeeze(0)
             batch_txy = events_norm[:, :-1].float().to(device)
-
-            # iwe = converter.create_iwe(events[:, [1,2,0,3]])
-            # cv.imwrite(f"iwe_{idx}.png", (iwe.T.detach().cpu().numpy()) * 255)
+            origin_iwe = converter.create_iwes(events[:, [2,1,0,3]])
 
             # get t_ref
             ref = warpper.get_reference_time(batch_txy, warp_config["tref_setting"])
@@ -137,9 +135,19 @@ if __name__ == "__main__":
             iwes = converter.create_iwes(warped_events_xytp) # [n,h,w] n can be one or multi
 
             # loss
-            var_loss = torch.Tensor([0]).to(device)
-            # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
-            grad_loss = focus.calculate_focus_loss(iwes, loss_type='gradient_magnitude', norm='l1')
+            if num_iwe == 1:
+                var_loss = torch.Tensor([0]).to(device)
+                # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
+                grad_loss = focus.calculate_focus_loss(iwes, loss_type='gradient_magnitude', norm='l1')
+            elif num_iwe > 1:
+                var_loss = torch.Tensor([0]).to(device)
+                # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
+                grad_loss_t_min = focus.calculate_focus_loss(iwes[0].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
+                grad_loss_t_mid = focus.calculate_focus_loss(iwes[len(iwes)//2].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
+                grad_loss_t_max = focus.calculate_focus_loss(iwes[-1].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
+                gard_loss_origin = focus.calculate_focus_loss(origin_iwe, loss_type='gradient_magnitude', norm='l1')
+
+                grad_loss = (grad_loss_t_min + grad_loss_t_max + 2 * grad_loss_t_mid) / 4 * gard_loss_origin
             total_loss = - (grad_loss + var_loss)
             wandb_logger.write("var_loss", var_loss.item())
             wandb_logger.write("grad_loss", grad_loss.item())
@@ -164,7 +172,7 @@ if __name__ == "__main__":
                 test_ref = warpper.get_reference_time(test_batch_txy, "max")
                 test_warped_batch_txy = warpper.warp_events(test_batch_txy, test_ref)
                 # create image warped event           
-                test_polarity = test_events_sorted[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1).to(device)
+                test_polarity = test_events_sorted[:, 3].unsqueeze(0).expand(1, num_events).unsqueeze(-1).to(device)
                 test_warped_events_xytp = torch.cat((test_warped_batch_txy[..., [2,1,0]], test_polarity), dim=2)
                 test_warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
                 optimized_iwe = converter.create_iwes(test_warped_events_xytp)
