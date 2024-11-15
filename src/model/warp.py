@@ -65,7 +65,7 @@ class NeuralODEWarp:
     #         pred_flow = self.flow_calculator.forward(warped_batch_txy)
     #         warped_batch_txy[:, 1:] += pred_flow * t_step
     #         warped_batch_txy[:, 0] += t_step.squeeze()
-        return warped_batch_txy
+    #     return warped_batch_txy
 
     def warp_events(self, batch_txy: torch.Tensor, t_ref: torch.Tensor):
         """

@@ -125,7 +125,7 @@ if __name__ == "__main__":
             # odewarp 
             warped_batch_txy = warpper.warp_events(batch_txy, ref)
 
-            # create image warped event      
+            # create image warped event    
             num_iwe = warped_batch_txy.shape[0]
             num_events = warped_batch_txy.shape[1]
             polarity = events[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1).to(device)
@@ -171,8 +171,10 @@ if __name__ == "__main__":
             with torch.no_grad():
                 test_ref = warpper.get_reference_time(test_batch_txy, "max")
                 test_warped_batch_txy = warpper.warp_events(test_batch_txy, test_ref)
-                # create image warped event           
-                test_polarity = test_events_sorted[:, 3].unsqueeze(0).expand(1, num_events).unsqueeze(-1).to(device)
+                # create image warped event 
+                num_iwe_test = test_warped_batch_txy.shape[0]
+                num_events_test = test_warped_batch_txy.shape[1]          
+                test_polarity = test_events_sorted[:, 3].unsqueeze(0).expand(num_iwe_test, num_events_test).unsqueeze(-1).to(device)
                 test_warped_events_xytp = torch.cat((test_warped_batch_txy[..., [2,1,0]], test_polarity), dim=2)
                 test_warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
                 optimized_iwe = converter.create_iwes(test_warped_events_xytp)
