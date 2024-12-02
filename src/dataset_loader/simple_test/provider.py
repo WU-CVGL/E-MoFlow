@@ -3,7 +3,8 @@ import torch
 import logging
 import numpy as np
 
-from typing import Dict, Any
+from src.utils import misc
+from typing import Dict, Any, Union, List
 from torch.utils.data import Dataset
 
 from .reader import SimpleTestDataset
@@ -21,35 +22,57 @@ class SimpleTestDataProvider(Dataset):
         self.duration = dataset.duration
         self.batch_range = dataset.batch_range
 
-    def get_batch_event_data(self, idx) -> Dict:
-        event_file_paths = self.dataset.txt_files_path[idx:idx+self.batch_range]
+    def get_train_data(self, idx) -> Dict:
+        event_file_paths = self.dataset.train_event_files_path
         event_data_list = [np.loadtxt(file) for file in event_file_paths]
         events = torch.from_numpy(np.vstack(event_data_list))
 
-        mask = (0 <= events[:, 1]) & (events[:, 1] < self.W) & \
-                (0 <= events[:, 2]) & (events[:, 2] < self.H)
-        events = events[mask]
-        events_sorted, sort_indices = torch.sort(events[:, 0])
-        events_sorted = events[sort_indices]
+        events_norm = misc.process_events(
+            origin_events=events,
+            image_size=(self.H, self.W),
+            start_end=(self.t_start,self.t_end)
+        )
 
-        events_norm = events_sorted.clone()
-        events_norm[:, 0] = (events[:, 0] - self.t_start) / (self.t_end - self.t_start) 
-        events_norm[:, 1] = events[:, 1] / self.W
-        events_norm[:, 2] = events[:, 2] / self.H
-
-        batch_data : Dict[str, Any] = {
-            "events": events_sorted,
+        train_batch_data : Dict[str, Any] = {
+            "events": events,
             "events_norm": events_norm,
             "timestamps": events[:, 0],
         }
 
-        return batch_data
+        return train_batch_data
+    
+    def get_valid_data(
+        self, 
+        valid_event_file_indices: Union[List[int],int]
+    ) -> torch.Tensor:
+        valid_event_file_paths = misc.get_filenames(
+            self.dataset.txt_files_path, valid_event_file_indices
+        )
+        valid_event_data_list = [np.loadtxt(file) for file in valid_event_file_paths]
+        valid_events = torch.from_numpy(np.vstack(valid_event_data_list))
+
+        valid_events_norm = misc.process_events(
+            origin_events=valid_events,
+            image_size=(self.H, self.W),
+            start_end=(self.t_start,self.t_end)
+        )
+
+        valid_batch_data : Dict[str, Any] = {
+            "events": valid_events,
+            "events_norm": valid_events_norm,
+            "timestamps": valid_events[:, 0],
+        }
+
+        return valid_batch_data
     
     def collate_batch_data(self):
         pass
 
+    # def __len__(self) -> int:
+    #     return self.dataset.data_num
+    
     def __len__(self) -> int:
-        return self.dataset.data_num
+        return 1
 
     def __getitem__(self, index) -> Dict:
-       return self.get_batch_event_data(index)
+       return self.get_train_data(index)

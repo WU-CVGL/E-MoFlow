@@ -21,7 +21,7 @@ from src.model.inr import EventFlowINR
 from src.model.warp import NeuralODEWarp
 from src.event_data import EventStreamData
 from src.dataset_loader import dataset_manager
-from src.event_image_converter import EventImageConverter
+from src.utils.event_image_converter import EventImageConverter
 
 # log
 logging.basicConfig(
@@ -68,26 +68,8 @@ if __name__ == "__main__":
     dataset_name = data_config.pop('dataset_name')
     dataloader_config = data_config.pop('loader')
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
-    loader = dataset_manager.create_loader(dataset, dataloader_config)
-
-    # prepare data to test
-    start_indice, end_indice = config["test"]["file_idx"]
-    test_event_file_paths = dataset.txt_files_path[start_indice:end_indice+1]
-    test_event_data_list = [np.loadtxt(file) for file in test_event_file_paths]
-    test_events = torch.from_numpy(np.vstack(test_event_data_list))
-
-    mask = (0 <= test_events[:, 1]) & (test_events[:, 1] < dataset.weight) & \
-            (0 <= test_events[:, 2]) & (test_events[:, 2] < dataset.hight)
-    test_events = test_events[mask]
-    test_events_sorted, sort_indices = torch.sort(test_events[:, 0])
-    test_events_sorted = test_events[sort_indices]
-
-    test_events_norm = test_events_sorted.clone()
-    test_events_norm[:, 0] = (test_events_sorted[:, 0] - dataset.event_start_time) / (dataset.event_end_time - dataset.event_start_time) 
-    test_events_norm[:, 1] = test_events_sorted[:, 1] / dataset.weight
-    test_events_norm[:, 2] = test_events_sorted[:, 2] / dataset.hight
-    test_batch_txy = test_events_norm[:, :-1].float().to(device)
-
+    loader, provider = dataset_manager.create_loader(dataset, dataloader_config)
+    
     # event2img converter
     image_size = (data_config["hight"], data_config["weight"])
     converter = EventImageConverter(image_size)
@@ -97,18 +79,25 @@ if __name__ == "__main__":
     warpper = NeuralODEWarp(flow_field, device, **warp_config)
 
     # create optimizer
-    optimizer = optim.Adam(flow_field.parameters(), lr=1e-4)
+    optimizer = optim.Adam(flow_field.parameters(), lr=optimizer_config["initial_lrate"])
+
+    # prepare data to test
+    valid_data = provider.get_valid_data(config["valid"]["file_idx"])
+    valid_events = valid_data["events"]
+    valid_events_norm = valid_data["events_norm"]
+    valid_events_timestamps = valid_data["timestamps"]
+    valid_batch_txy = valid_events_norm[:, :-1].float().to(device)
 
     # display origin test data
     with torch.no_grad():
-        test_origin_iwe = converter.create_iwes(test_events_sorted[:, [2,1,0,3]])
+        test_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
         wandb_logger.write_img("iwe", test_origin_iwe.detach().cpu().numpy() * 255)
         wandb_logger.update_buffer()
 
     # train
     num_epochs = 1000    
     decay_steps = 1
-    decay_factor = (1e-6 / 1e-4) ** (1 / (num_epochs / decay_steps))
+    decay_factor = (optimizer_config["final_lrate"] / optimizer_config["initial_lrate"]) ** (1 / (num_epochs / decay_steps))
     start_time = time.time()
     for i in range(num_epochs):
         for idx, sample in enumerate(tqdm(loader, desc=f"Tranning {i} epoch", leave=True)):
@@ -136,8 +125,8 @@ if __name__ == "__main__":
 
             # loss
             if num_iwe == 1:
-                var_loss = torch.Tensor([0]).to(device)
-                # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
+                # var_loss = torch.Tensor([0]).to(device)
+                var_loss = focus.calculate_focus_loss(iwes, loss_type='variance')
                 grad_loss = focus.calculate_focus_loss(iwes, loss_type='gradient_magnitude', norm='l1')
             elif num_iwe > 1:
                 var_loss = torch.Tensor([0]).to(device)
@@ -169,15 +158,15 @@ if __name__ == "__main__":
         # test
         if (i+1) % 10 == 0:
             with torch.no_grad():
-                test_ref = warpper.get_reference_time(test_batch_txy, "max")
-                test_warped_batch_txy = warpper.warp_events(test_batch_txy, test_ref)
+                valid_ref = warpper.get_reference_time(valid_batch_txy, "max")
+                valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref)
                 # create image warped event 
-                num_iwe_test = test_warped_batch_txy.shape[0]
-                num_events_test = test_warped_batch_txy.shape[1]          
-                test_polarity = test_events_sorted[:, 3].unsqueeze(0).expand(num_iwe_test, num_events_test).unsqueeze(-1).to(device)
-                test_warped_events_xytp = torch.cat((test_warped_batch_txy[..., [2,1,0]], test_polarity), dim=2)
-                test_warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
-                optimized_iwe = converter.create_iwes(test_warped_events_xytp)
+                num_iwe_valid = valid_warped_batch_txy.shape[0]
+                num_events_valid = valid_warped_batch_txy.shape[1]          
+                valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
+                valid_warped_batch_txy = torch.cat((valid_warped_batch_txy[..., [2,1,0]], valid_polarity), dim=2)
+                valid_warped_batch_txy[..., :2] *= torch.Tensor(image_size).to(device)
+                optimized_iwe = converter.create_iwes(valid_warped_batch_txy)
                 wandb_logger.write_img("iwe", optimized_iwe.detach().cpu().numpy() * 255)
 
         # log
