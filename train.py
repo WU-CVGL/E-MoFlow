@@ -112,7 +112,7 @@ if __name__ == "__main__":
             ref = warpper.get_reference_time(batch_txy, warp_config["tref_setting"])
 
             # odewarp 
-            warped_batch_txy = warpper.warp_events(batch_txy, ref)
+            warped_batch_txy = warpper.warp_events(batch_txy, ref, method="euler")
 
             # create image warped event    
             num_iwe = warped_batch_txy.shape[0]
@@ -121,7 +121,12 @@ if __name__ == "__main__":
             warped_events_xytp = torch.cat((warped_batch_txy[..., [2,1,0]], polarity), dim=2)
             with torch.no_grad():
                 warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
-            iwes = converter.create_iwes(warped_events_xytp) # [n,h,w] n can be one or multi
+            iwes = converter.create_iwes(
+                events=warped_events_xytp,
+                method="bilinear_vote",
+                sigma=1.0,
+                blur=True
+            ) # [n,h,w] n can be one or multi
 
             # loss
             if num_iwe == 1:
@@ -158,15 +163,20 @@ if __name__ == "__main__":
         # test
         if (i+1) % 10 == 0:
             with torch.no_grad():
-                valid_ref = warpper.get_reference_time(valid_batch_txy, "max")
-                valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref)
+                valid_ref = warpper.get_reference_time(valid_batch_txy, "min")
+                valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref, method="euler")
                 # create image warped event 
                 num_iwe_valid = valid_warped_batch_txy.shape[0]
                 num_events_valid = valid_warped_batch_txy.shape[1]          
                 valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
                 valid_warped_batch_txy = torch.cat((valid_warped_batch_txy[..., [2,1,0]], valid_polarity), dim=2)
                 valid_warped_batch_txy[..., :2] *= torch.Tensor(image_size).to(device)
-                optimized_iwe = converter.create_iwes(valid_warped_batch_txy)
+                optimized_iwe = converter.create_iwes(
+                    events=valid_warped_batch_txy,
+                    method="bilinear_vote",
+                    sigma=1.0,
+                    blur=False
+                )
                 wandb_logger.write_img("iwe", optimized_iwe.detach().cpu().numpy() * 255)
 
         # log

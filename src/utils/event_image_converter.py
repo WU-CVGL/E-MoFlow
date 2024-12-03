@@ -53,6 +53,7 @@ class EventImageConverter(object):
         events: NUMPY_TORCH,
         method: str = "bilinear_vote",
         sigma: int = 1,
+        blur: bool = True
     ) -> NUMPY_TORCH:
         """Create Image of Warped Events (IWE).
 
@@ -67,7 +68,7 @@ class EventImageConverter(object):
         if is_numpy(events):
             iwes = self.create_image_from_events_numpy(events, method, sigma=sigma)
         elif is_torch(events):
-            iwes = self.create_image_from_events_tensor(events, method, sigma=sigma)
+            iwes = self.create_image_from_events_tensor(events, method, sigma=sigma, blur=blur)
         else:
             e = f"Non-supported type of events. {type(events)}"
             logger.error(e)
@@ -100,6 +101,7 @@ class EventImageConverter(object):
         method: str = "bilinear_vote",
         weight: Union[float, np.ndarray] = 255.0,
         sigma: int = 1,
+        blur: bool = True
     ) -> np.ndarray:
         """Create image of events for numpy array.
 
@@ -131,7 +133,8 @@ class EventImageConverter(object):
             logger.error(e)
             raise NotImplementedError(e)
         if sigma > 0:
-            image = gaussian_filter(image, sigma)
+            if blur == True:
+                image = gaussian_filter(image, sigma)
         return image
 
     def create_image_from_events_tensor(
@@ -140,6 +143,7 @@ class EventImageConverter(object):
         method: str = "bilinear_vote",
         weight: FLOAT_TORCH = 1.0,
         sigma: int = 0,
+        blur: bool = True
     ) -> torch.Tensor:
         """Create image of events for tensor array.
 
@@ -166,7 +170,8 @@ class EventImageConverter(object):
                 image = image[None, None, ...]
             elif len(image.shape) == 3:
                 image = image[:, None, ...]
-            image = gaussian_blur(image, kernel_size=3, sigma=sigma)
+            if blur == True:
+                image = gaussian_blur(image, kernel_size=3, sigma=sigma)
         return torch.squeeze(image)
 
     def count_event_numpy(self, events: np.ndarray):
