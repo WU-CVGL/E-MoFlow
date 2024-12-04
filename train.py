@@ -89,10 +89,9 @@ if __name__ == "__main__":
     valid_batch_txy = valid_events_norm[:, :-1].float().to(device)
 
     # display origin test data
-    with torch.no_grad():
-        test_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
-        wandb_logger.write_img("iwe", test_origin_iwe.detach().cpu().numpy() * 255)
-        wandb_logger.update_buffer()
+    test_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
+    wandb_logger.write_img("iwe", test_origin_iwe.detach().cpu().numpy() * 255)
+    wandb_logger.update_buffer()
 
     # train
     num_epochs = optimizer_config["num_epoch"]
@@ -119,8 +118,9 @@ if __name__ == "__main__":
             num_events = warped_batch_txy.shape[1]
             polarity = events[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1).to(device)
             warped_events_xytp = torch.cat((warped_batch_txy[..., [2,1,0]], polarity), dim=2)
-            with torch.no_grad():
-                warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
+            warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
+            # with torch.no_grad():
+            #     warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
             iwes = converter.create_iwes(
                 events=warped_events_xytp,
                 method="bilinear_vote",
