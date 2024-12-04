@@ -47,5 +47,6 @@ def create_loader(dataset: DatasetBase, config: dict):
         dataprovider, 
         batch_size=config["batch_size"], 
         num_workers=config["num_workers"], 
-        shuffle=config["shuffle"]
+        shuffle=config["shuffle"],
+        pin_memory=config["pin_memory"]
     ), dataprovider

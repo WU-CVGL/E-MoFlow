@@ -8,11 +8,12 @@ logger = logging.getLogger(__name__)
 
 class NeuralODEWarp:
     def __init__(self, flow_inr: EventFlowINR, device: torch.device, 
-                 tref_setting: str, num_step: int) -> None:
+                 tref_setting: str, num_step: int, solver: str) -> None:
         self.flow_calculator = flow_inr       # calculate dy/dt
         self.device = device
         self.num_step = num_step
         self.tref_setting = tref_setting
+        self.solver = solver
         
     def get_reference_time(self, batch_txy: torch.Tensor, tref_setting: str):
         """

@@ -95,7 +95,7 @@ if __name__ == "__main__":
         wandb_logger.update_buffer()
 
     # train
-    num_epochs = 1000    
+    num_epochs = optimizer_config["num_epoch"]
     decay_steps = 1
     decay_factor = (optimizer_config["final_lrate"] / optimizer_config["initial_lrate"]) ** (1 / (num_epochs / decay_steps))
     start_time = time.time()
@@ -112,7 +112,7 @@ if __name__ == "__main__":
             ref = warpper.get_reference_time(batch_txy, warp_config["tref_setting"])
 
             # odewarp 
-            warped_batch_txy = warpper.warp_events(batch_txy, ref, method="euler")
+            warped_batch_txy = warpper.warp_events(batch_txy, ref, method=warp_config["solver"])
 
             # create image warped event    
             num_iwe = warped_batch_txy.shape[0]
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         if (i+1) % 10 == 0:
             with torch.no_grad():
                 valid_ref = warpper.get_reference_time(valid_batch_txy, "min")
-                valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref, method="euler")
+                valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref, method=warp_config["solver"])
                 # create image warped event 
                 num_iwe_valid = valid_warped_batch_txy.shape[0]
                 num_events_valid = valid_warped_batch_txy.shape[1]          
