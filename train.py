@@ -12,11 +12,10 @@ import torch.nn as nn
 import torch.optim as optim
 
 from tqdm import tqdm
-from scipy.ndimage import zoom
 
-from src import load_config
 from src.loss import focus
-from src.wandb import WandbLogger
+from src.utils import load_config
+from src.utils.wandb import WandbLogger
 from src.model.inr import EventFlowINR
 from src.model.warp import NeuralODEWarp
 from src.event_data import EventStreamData
