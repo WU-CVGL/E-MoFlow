@@ -1,2 +1,6 @@
 __pycache__
 wandb
+main.log
+neuef_task.yaml
+outputs
+weights
