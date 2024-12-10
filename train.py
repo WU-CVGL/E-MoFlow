@@ -4,7 +4,7 @@ import time
 import random
 import logging
 import tensorhue
-import cv2 as cv
+import cv2 as cv2
 import numpy as np
 
 import torch 
@@ -185,44 +185,10 @@ if __name__ == "__main__":
     training_time = end_time - start_time
     logger.info(f'Training Time: {training_time:.2f} seconds')
 
-            # iwe_numpy = iwe.T.detach().cpu().numpy()
-            # tensorhue.viz(zoom(iwe_numpy, (1/8,1/8)))
-            # cv.imwrite(f"iwe_{j}.png", (iwe.T.detach().cpu().numpy()) * 255)
-            # print(warped_events[0][0].item(), warped_events[-1][0].item(), ref["t_ref"].item())
-            # batch_xy0, batch_t0 = batch_txy[:, 1:], batch_txy[:, 0] 
-            # t_ref = torch.max(batch_t0) + (1 - torch.max(batch_t0)) * torch.rand(1).to(device)
-            # for xy0, t0 in zip(batch_xy0, batch_t0):
-            #     distance = torch.abs(t_ref - t0)
-            #     num_eval = max(2, int(distance / 1))  
-            #     eval_t = torch.linspace(t0.item(), t_ref.item(), num_eval).to(device)
-            #     # print(t0.shape)
-            #     pred_y = torchdiffeq.odeint_adjoint(flow_field, xy0, eval_t).to(device)
-            #     print(pred_y.device)
-            # print("1 batch down")
-                # print(xy0.shape)
-            # print(f"max: {torch.max(t_0).item()}")
-            # print(f"t_ref: {batch_t0[-1].item()}")
-            # print(value_0[0][0])
-            # pred_y = torchdiffeq.odeint_adjoint(flow_field, )
-            # out = flow_field.forward(xyt_coordinate, model_config)
-            # print(out.shape)
-            # logger.info(f"start: {txy[0][0].tolist()}, end: {txy[-1][0].tolist()}")
-            # time.sleep(0.5)
-            # logger.info(f"data(x y t p): {sample["events"]}")
-    # print(dataset.data_num)
+    # save model
+    log_model_path = config["logger"]["model_weight_path"]
+    dir_name = os.path.dirname(log_model_path) 
+    os.makedirs(dir_name, exist_ok=True)
+    torch.save(flow_field.state_dict(), log_model_path)
 
 
-
-    # create eventstream
-    # eventstream = EventStreamData(
-    #     data_path = "/home/liwenpu-cvgl/events/000550.txt", t_start = 0, t_end = 1, 
-    #     H=480, W=640, color_event=False, event_thresh=1, device=device
-    # )
-    # eventstream.stack_event_images(1)
-    # eventstream.visuailize_event_images()
-
-    # eventstream.events = eventstream.events[:, [1,2,0,3]]
-    # iwe = converter.create_iwe(eventstream.events)
-    # # print(iwe.shape)
-    # cv.imwrite(f"iwe.png", iwe.T)
-    # tensorhue.viz(zoom(iwe.T, (1/8,1/8)))
