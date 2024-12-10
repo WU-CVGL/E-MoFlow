@@ -33,7 +33,7 @@ def compute_dense_flow(
     u, v = flow[:, 0], flow[:, 1]
     U = u.view(H, W)
     V = v.view(H, W)
-
+    U, V = U * W, V * H
     return u, v, x, y, U, V
 
 if __name__ == "__main__":
@@ -75,11 +75,20 @@ if __name__ == "__main__":
         visualize_color_wheel=True,
         file_prefix="test_dense_optical_flow",
         save_flow=False,
-        ord=1,
+        ord=1.0,
+    )
+
+    arrow_flow = viz.visualize_flow_arrows(
+        flow_x=U.cpu().numpy(),
+        flow_y=V.cpu().numpy(),  
+        file_prefix="optical_flow_arrow",
+        sampling_ratio=0.0035, 
+        bg_color=(255, 255, 255)    
     )
 
     # upload wandb
     wandb_logger.write_img("color_optical_flow", color_flow)
     wandb_logger.write_img("color_wheel", wheel)
+    wandb_logger.write_img("optical_flow_arrow", arrow_flow)
     wandb_logger.update_buffer()
 

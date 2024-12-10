@@ -1,17 +1,15 @@
-import logging
 import os
-from typing import Any, Dict, List, Optional
-
 import cv2
+import random
+import logging
 import numpy as np
-# import plotly.graph_objects as go
-from matplotlib import pyplot as plt
-
-logger = logging.getLogger(__name__)
 
 from PIL import Image, ImageDraw
-
+from matplotlib import pyplot as plt
+from typing import Any, Dict, List, Optional
 from src.utils import event_image_converter
+
+logger = logging.getLogger(__name__)
 
 TRANSPARENCY = 0.25  # Degree of transparency, 0-100%
 OPACITY = int(255 * TRANSPARENCY)
@@ -291,7 +289,71 @@ class Visualizer:
         self._show, self._save = _show, _save
         self._show_or_save_image(masked_flow, file_prefix)
         return masked_flow
+    
+    def visualize_flow_arrows(
+        self, 
+        flow_x: np.ndarray, 
+        flow_y: np.ndarray,
+        file_prefix: Optional[str] = None, 
+        sampling_ratio: float = 0.1, 
+        bg_color: tuple = (0, 0, 0)
+    ):
+        """
+        Visualize optical flow as arrows.
 
+        Args:
+            flow_x (numpy.ndarray) ... [H x W], height direction.
+            flow_y (numpy.ndarray) ... [H x W], width direction.
+            file_prefix (Optional[str], optional): File prefix for saving the image. Defaults to None.
+            sampling_ratio (float, optional): Ratio of flow vectors to sample for visualization. Defaults to 0.1.
+            bg_color (tuple, optional): Background color of the output image. Defaults to (0, 0, 0) (black).
+
+        Returns:
+            Image.Image: PIL Image object with flow arrows.
+        """
+        height, width = flow_x.shape
+
+        # Sample flow vectors
+        num_vectors = int(flow_x.size * sampling_ratio)
+        indices = random.sample(range(flow_x.size), num_vectors)
+        sampled_flow_x = flow_x.flatten()[indices]
+        sampled_flow_y = flow_y.flatten()[indices]
+        sampled_coords = np.array(np.unravel_index(indices, flow_x.shape)).T
+
+        # Create a blank image
+        image = np.zeros((height, width, 3), dtype=np.uint8)
+        image[:] = bg_color[::-1]
+
+        # Get the maximum flow magnitude for normalization
+        max_mag = np.sqrt(np.max(flow_x) ** 2 + np.max(flow_y) ** 2)
+
+        # Draw arrows on the image
+        for (y, x), flow_x, flow_y in zip(sampled_coords, sampled_flow_x, sampled_flow_y):
+            flow_mag = np.sqrt(flow_x ** 2 + flow_y ** 2)
+            mag_ratio = flow_mag / max_mag
+
+            def get_color(x):
+                blue = (0, 0, 255)
+                red = (255, 0, 0)
+                
+                r = int(blue[0] + (red[0] - blue[0]) * x)
+                g = int(blue[1] + (red[1] - blue[1]) * x)
+                b = int(blue[2] + (red[2] - blue[2]) * x)
+                
+                return (b, g, r)
+
+            # color = tuple(int(255 * mag_ratio) for _ in range(3))
+            color = get_color(mag_ratio)
+            # color = (0,0,255)
+
+            # Draw line
+            image = cv2.arrowedLine(image, (x, y), (x + int(flow_x), y + int(flow_y)), color, 1, cv2.LINE_AA)
+
+        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        self._show_or_save_image(image, file_prefix)
+
+        return image
+    
     def visualize_optical_flow_pred_and_gt(
         self,
         flow_pred: np.ndarray,
