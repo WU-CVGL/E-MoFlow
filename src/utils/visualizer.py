@@ -192,8 +192,8 @@ class Visualizer:
     ):
         """Visualize optical flow.
         Args:
-            flow_x (numpy.ndarray) ... [H x W], height direction.
-            flow_y (numpy.ndarray) ... [H x W], width direction.
+            flow_x (numpy.ndarray) ... [H x W], horizontal direction.
+            flow_y (numpy.ndarray) ... [H x W], vertical direction.
             visualize_color_wheel (bool) ... If True, it also visualizes the color wheel (legend for OF).
             file_prefix (Optional[str], optional): [description]. Defaults to None.
                 If specified, the save location will be `save_dir/{prefix}_{unique}.png`.
@@ -302,8 +302,8 @@ class Visualizer:
         Visualize optical flow as arrows.
 
         Args:
-            flow_x (numpy.ndarray) ... [H x W], height direction.
-            flow_y (numpy.ndarray) ... [H x W], width direction.
+            flow_x (numpy.ndarray) ... [H x W], horizontal direction.
+            flow_y (numpy.ndarray) ... [H x W], vertical direction.
             file_prefix (Optional[str], optional): File prefix for saving the image. Defaults to None.
             sampling_ratio (float, optional): Ratio of flow vectors to sample for visualization. Defaults to 0.1.
             bg_color (tuple, optional): Background color of the output image. Defaults to (0, 0, 0) (black).
@@ -398,8 +398,8 @@ class Visualizer:
     ):
         """Color optical flow.
         Args:
-            flow_x (numpy.ndarray) ... [H x W], height direction.
-            flow_y (numpy.ndarray) ... [H x W], width direction.
+            flow_x (numpy.ndarray) ... [H x W], horizontal direction.
+            flow_y (numpy.ndarray) ... [H x W], vertical direction.
             max_magnitude (float, optional) ... Max magnitude used for the colorization. Defaults to None.
             ord (float) ... 1: our usual, 0.5: DSEC colorinzing.
 
@@ -408,33 +408,30 @@ class Visualizer:
             color_wheel (np.ndarray) ... [H, H] color wheel
             max_magnitude (float) ... max magnitude of the flow.
         """
-        flows = np.stack((flow_x, flow_y), axis=2)
+        flows = np.stack((flow_y, flow_x), axis=2)
         flows[np.isinf(flows)] = 0
         flows[np.isnan(flows)] = 0
         mag = np.linalg.norm(flows, axis=2) ** ord
-        ang = (np.arctan2(flow_y, flow_x) + np.pi) * 180.0 / np.pi / 2.0
+        ang = (np.arctan2(flow_x, flow_y) + np.pi) * 180.0 / np.pi / 2.0
         ang = ang.astype(np.uint8)
-        hsv = np.zeros([flow_x.shape[0], flow_x.shape[1], 3], dtype=np.uint8)
+        hsv = np.zeros([flow_y.shape[0], flow_y.shape[1], 3], dtype=np.uint8)
         hsv[:, :, 0] = ang
         hsv[:, :, 1] = 255
         if max_magnitude is None:
             max_magnitude = mag.max()
-        hsv[:, :, 2] = (255 * mag / max_magnitude).astype(np.uint8)
-        # hsv[:, :, 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+        hsv[:, :, 2] = (255 * mag / (max_magnitude + 1e-6)).astype(np.uint8)
         flow_rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
         # Color wheel
-        hsv = np.zeros([flow_x.shape[0], flow_x.shape[0], 3], dtype=np.uint8)
+        hsv = np.zeros([flow_y.shape[0], flow_y.shape[0], 3], dtype=np.uint8)
         xx, yy = np.meshgrid(
-            np.linspace(-1, 1, flow_x.shape[0]), np.linspace(-1, 1, flow_x.shape[0])
+            np.linspace(-1, 1, flow_y.shape[0]), np.linspace(-1, 1, flow_y.shape[0])
         )
         mag = np.linalg.norm(np.stack((xx, yy), axis=2), axis=2)
-        # ang = (np.arctan2(yy, xx) + np.pi) * 180 / np.pi / 2.0
         ang = (np.arctan2(xx, yy) + np.pi) * 180 / np.pi / 2.0
         hsv[:, :, 0] = ang.astype(np.uint8)
         hsv[:, :, 1] = 255
         hsv[:, :, 2] = (255 * mag / mag.max()).astype(np.uint8)
-        # hsv[:, :, 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
         color_wheel = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
         return flow_rgb, color_wheel, max_magnitude
