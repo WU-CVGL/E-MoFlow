@@ -4,8 +4,8 @@ import random
 import logging
 import numpy as np
 
-from PIL import Image, ImageDraw
 from matplotlib import pyplot as plt
+from PIL import Image, ImageDraw, ImageFont
 from typing import Any, Dict, List, Optional
 from src.utils import event_image_converter
 
@@ -313,46 +313,79 @@ class Visualizer:
         """
         height, width = flow_x.shape
 
-        # Sample flow vectors
-        num_vectors = int(flow_x.size * sampling_ratio)
-        indices = random.sample(range(flow_x.size), num_vectors)
-        sampled_flow_x = flow_x.flatten()[indices]
-        sampled_flow_y = flow_y.flatten()[indices]
-        sampled_coords = np.array(np.unravel_index(indices, flow_x.shape)).T
+        step = max(int(1 / np.sqrt(sampling_ratio)), 1)  
+        y_coords, x_coords = np.mgrid[0:height:step, 0:width:step]
+        sampled_flow_x = flow_x[::step, ::step].flatten()
+        sampled_flow_y = flow_y[::step, ::step].flatten()
+        sampled_coords = np.vstack((y_coords.flatten(), x_coords.flatten())).T
 
-        # Create a blank image
         image = np.zeros((height, width, 3), dtype=np.uint8)
-        image[:] = bg_color[::-1]
+        image[:] = bg_color[::-1]  
 
-        # Get the maximum flow magnitude for normalization
-        max_mag = np.sqrt(np.max(flow_x) ** 2 + np.max(flow_y) ** 2)
+        flow_magnitude = np.sqrt(sampled_flow_x ** 2 + sampled_flow_y ** 2)
+        max_magnitude = flow_magnitude.max()
+        min_magnitude = flow_magnitude.min()
+        if max_magnitude == 0:
+            max_magnitude = 1  
 
-        # Draw arrows on the image
-        for (y, x), flow_x, flow_y in zip(sampled_coords, sampled_flow_x, sampled_flow_y):
-            flow_mag = np.sqrt(flow_x ** 2 + flow_y ** 2)
-            mag_ratio = flow_mag / max_mag
+        # _, color_wheel, _ = self.color_optical_flow(flow_x, flow_y, ord=1.0)  
 
-            def get_color(x):
-                blue = (0, 0, 255)
-                red = (255, 0, 0)
-                
-                r = int(blue[0] + (red[0] - blue[0]) * x)
-                g = int(blue[1] + (red[1] - blue[1]) * x)
-                b = int(blue[2] + (red[2] - blue[2]) * x)
-                
-                return (b, g, r)
-
-            # color = tuple(int(255 * mag_ratio) for _ in range(3))
+        def get_color(x):
+            blue = (0, 0, 255)
+            red = (255, 0, 0)
+            
+            r = int(blue[0] + (red[0] - blue[0]) * x)
+            g = int(blue[1] + (red[1] - blue[1]) * x)
+            b = int(blue[2] + (red[2] - blue[2]) * x)
+            
+            return (b, g, r)
+        
+        for (y, x), fx, fy, mag in zip(sampled_coords, sampled_flow_x, sampled_flow_y, flow_magnitude):
+            mag_ratio = mag / max_magnitude
             color = get_color(mag_ratio)
-            # color = (0,0,255)
 
-            # Draw line
-            image = cv2.arrowedLine(image, (x, y), (x + int(flow_x), y + int(flow_y)), color, 1, cv2.LINE_AA)
+            end_x = int(x + fx)
+            end_y = int(y + fy)
 
-        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        self._show_or_save_image(image, file_prefix)
+            image = cv2.arrowedLine(
+                image, 
+                (x, y), 
+                (end_x, end_y), 
+                color, 
+                thickness=1, 
+                tipLength=0.3,  
+                line_type=cv2.LINE_AA
+            )
 
-        return image
+        # create color bar
+        color_bar_width = 20
+        color_bar_height = height
+        color_bar = Image.new("RGB", (color_bar_width, color_bar_height), color=bg_color[::-1])
+        draw = ImageDraw.Draw(color_bar)
+        for i in range(color_bar_height):
+            ratio = i / (color_bar_height - 1)
+            mag_ratio = 1 - ratio
+            bar_color = get_color(mag_ratio)[::-1]
+            draw.line([(0, i), (color_bar_width, i)], fill=bar_color)
+
+        # add min and max magnitude value
+        try:
+            font = ImageFont.truetype("arial.ttf", size=12)
+        except IOError:
+            font = ImageFont.load_default()
+        draw.text((2, 0), f"{max_magnitude:.2f}", fill=(255, 255, 255), font=font)
+        draw.text((2, color_bar_height - 12), f"{min_magnitude:.2f}", fill=(255, 255, 255), font=font)
+
+        # combine arrow image and bar
+        arrows_image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        combined_width = arrows_image_pil.width + color_bar.width + 10  # 10 pixels padding
+        combined_image = Image.new("RGB", (combined_width, arrows_image_pil.height), color=bg_color[::-1])
+        combined_image.paste(arrows_image_pil, (0, 0))
+        combined_image.paste(color_bar, (arrows_image_pil.width + 10, 0))
+
+        self._show_or_save_image(combined_image, file_prefix)
+
+        return combined_image   
     
     def visualize_optical_flow_pred_and_gt(
         self,
@@ -435,6 +468,22 @@ class Visualizer:
         color_wheel = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
         return flow_rgb, color_wheel, max_magnitude
+    
+    def get_color_from_wheel(self, angle: float, color_wheel: np.ndarray) -> tuple:
+        """
+        Get color from the color wheel based on the angle.
+
+        Args:
+            angle (float): Angle, range [0, 1].
+            color_wheel (numpy.ndarray): Color wheel image.
+
+        Returns:
+            tuple: (B, G, R) color values.
+        """
+        wheel_height, wheel_width, _ = color_wheel.shape
+        x = int(angle * (wheel_width - 1))
+        color = color_wheel[wheel_height // 2, x]
+        return tuple(int(c) for c in color)
 
     # Event related
     def visualize_event(

@@ -82,7 +82,7 @@ if __name__ == "__main__":
         flow_x=U.cpu().numpy(),
         flow_y=V.cpu().numpy(),  
         file_prefix="optical_flow_arrow",
-        sampling_ratio=0.0035, 
+        sampling_ratio=0.001, 
         bg_color=(255, 255, 255)    
     )
 
