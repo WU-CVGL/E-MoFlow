@@ -3,7 +3,6 @@ import sys
 import time
 import random
 import logging
-import tensorhue
 import cv2 as cv2
 import numpy as np
 
@@ -15,9 +14,10 @@ from tqdm import tqdm
 
 from src.loss import focus
 from src.utils import load_config
-from src.utils.wandb import WandbLogger
 from src.model.inr import EventFlowINR
+from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp
+from src.utils.timer import TimeAnalyzer
 from src.event_data import EventStreamData
 from src.dataset_loader import dataset_manager
 from src.utils.event_image_converter import EventImageConverter
@@ -34,6 +34,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# set seeds
 def fix_random_seed(seed_idx=666) -> None:
     random.seed(seed_idx)
     np.random.seed(seed_idx)
@@ -80,24 +81,29 @@ if __name__ == "__main__":
     # create optimizer
     optimizer = optim.Adam(flow_field.parameters(), lr=optimizer_config["initial_lrate"])
 
-    # prepare data to test
+    # prepare data to valid
     valid_data = provider.get_valid_data(config["valid"]["file_idx"])
     valid_events = valid_data["events"]
     valid_events_norm = valid_data["events_norm"]
     valid_events_timestamps = valid_data["timestamps"]
     valid_batch_txy = valid_events_norm[:, :-1].float().to(device)
 
-    # display origin test data
-    test_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
-    wandb_logger.write_img("iwe", test_origin_iwe.detach().cpu().numpy() * 255)
+    # display origin valid data
+    valid_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
+    wandb_logger.write_img("iwe", valid_origin_iwe.detach().cpu().numpy() * 255)
     wandb_logger.update_buffer()
+
+    # time analysis
+    time_analyzer = TimeAnalyzer()
 
     # train
     num_epochs = optimizer_config["num_epoch"]
     decay_steps = 1
     decay_factor = (optimizer_config["final_lrate"] / optimizer_config["initial_lrate"]) ** (1 / (num_epochs / decay_steps))
-    start_time = time.time()
     for i in range(num_epochs):
+        
+        time_analyzer.start_epoch()
+
         for idx, sample in enumerate(tqdm(loader, desc=f"Tranning {i} epoch", leave=True)):
             # get batch data
             events = sample["events"].squeeze(0)
@@ -118,8 +124,6 @@ if __name__ == "__main__":
             polarity = events[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1).to(device)
             warped_events_xytp = torch.cat((warped_batch_txy[..., [2,1,0]], polarity), dim=2)
             warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
-            # with torch.no_grad():
-            #     warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
             iwes = converter.create_iwes(
                 events=warped_events_xytp,
                 method="bilinear_vote",
@@ -159,8 +163,9 @@ if __name__ == "__main__":
             param_group['lr'] *= decay_factor
         wandb_logger.write("learing_rate", param_group['lr'])
 
-        # test
+        # valid
         if (i+1) % 10 == 0:
+            time_analyzer.start_valid()
             with torch.no_grad():
                 valid_ref = warpper.get_reference_time(valid_batch_txy, "min")
                 valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref, method=warp_config["solver"])
@@ -177,13 +182,17 @@ if __name__ == "__main__":
                     blur=False
                 )
                 wandb_logger.write_img("iwe", optimized_iwe.detach().cpu().numpy() * 255)
+            time_analyzer.end_valid()
 
         # log
+        time_analyzer.end_epoch()
         wandb_logger.update_buffer()
 
-    end_time = time.time()
-    training_time = end_time - start_time
-    logger.info(f'Training Time: {training_time:.2f} seconds')
+    stats = time_analyzer.get_statistics()
+    wandb_logger.write("Total Trainning Time", (stats["total_train_time"] / 60))
+    wandb_logger.write("Average Epoch Time", (stats["avg_epoch_time"] / 60))
+    wandb_logger.write("Total Validation Time", (stats["total_valid_time"] / 60))
+    wandb_logger.write("Average Validation Time", (stats["avg_valid_time"] / 60))
 
     # save model
     log_model_path = config["logger"]["model_weight_path"]
