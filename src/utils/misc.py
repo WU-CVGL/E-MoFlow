@@ -2,6 +2,13 @@ import torch
 import numpy as np
 from typing import List, Tuple, Union
 
+def load_camera_intrinsic(
+    file_path: str
+):
+    K = np.loadtxt(file_path)
+    K_tensor = torch.from_numpy(K).float()
+    return K_tensor
+
 def process_events(
     origin_events: torch.Tensor,
     image_size: Tuple[int, int],

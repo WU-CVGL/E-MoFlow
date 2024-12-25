@@ -69,6 +69,7 @@ if __name__ == "__main__":
     dataloader_config = data_config.pop('loader')
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
     loader, provider = dataset_manager.create_loader(dataset, dataloader_config)
+    camera_K = provider.get_camera_K()
     
     # event2img converter
     image_size = (data_config["hight"], data_config["weight"])
@@ -193,7 +194,8 @@ if __name__ == "__main__":
     wandb_logger.write("Average Epoch Time", (stats["avg_epoch_time"] / 60))
     wandb_logger.write("Total Validation Time", (stats["total_valid_time"] / 60))
     wandb_logger.write("Average Validation Time", (stats["avg_valid_time"] / 60))
-
+    wandb_logger.update_buffer()
+    
     # save model
     log_model_path = config["logger"]["model_weight_path"]
     dir_name = os.path.dirname(log_model_path) 
