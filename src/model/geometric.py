@@ -5,6 +5,24 @@ import theseus as th
 
 from typing import Any, List, Optional, Tuple, Union
 
+def vector_angle(v1: torch.Tensor, v2: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    v1_norm = torch.norm(v1, dim=-1)
+    v2_norm = torch.norm(v2, dim=-1)
+    
+    zero_mask = (v1_norm < eps) | (v2_norm < eps)
+    
+    dot_product = torch.sum(v1 * v2, dim=-1)
+    cosine = dot_product / (v1_norm * v2_norm + eps)
+    cosine = torch.clamp(cosine, -1.0 + eps, 1.0 - eps)
+    angle = torch.acos(cosine)
+    
+    angle = torch.where(zero_mask, torch.zeros_like(angle), angle)
+    return angle
+
+def vector_angle_degree(v1: torch.Tensor, v2: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    angle_rad = vector_angle(v1, v2, eps)
+    return angle_rad * 180 / torch.pi
+
 def quat2angvel(q1: torch.Tensor, q2: torch.Tensor, dt: float) -> torch.Tensor:
     """
     Convert quaternion difference to angular velocity
@@ -221,7 +239,7 @@ class PoseOptimizer:
         optim_vars = [v, w]
         aux_vars = [x, u]
         w_dec = th.ScaleCostWeight(1.0)
-        w_norm = th.ScaleCostWeight(10000.0)  # we provide 2, as sqrt of 4 for the (y-b)^2 term
+        w_norm = th.ScaleCostWeight(0.0)  # we provide 2, as sqrt of 4 for the (y-b)^2 term
         dec_cost_fn = th.AutoDiffCostFunction(
             optim_vars,
             dec_error_fn,
@@ -241,7 +259,7 @@ class PoseOptimizer:
         
         return [dec_cost_fn, vel_cost_fn]
     
-    def optimize(self, normalized_coords, optical_flow, num_iterations=1000):
+    def optimize(self, normalized_coords, optical_flow, init_velc=None, num_iterations=1000):
         # check
         assert normalized_coords.shape[-1] == 3, "[ERROR] Normalized coordinates should be in homogeneous form [x,y,1]"
         assert optical_flow.shape[-1] == 3, "[ERROR] Optical flow should be in homogeneous form [u,v,0]"
@@ -254,21 +272,22 @@ class PoseOptimizer:
         cost_functions = self.create_cost_function(
             normalized_coords, optical_flow
         )
-        # objective.add(cost_functions)
-        
-        # 添加不同权重的代价函数
         for cost_fn in cost_functions:
-                objective.add(cost_fn)
+            objective.add(cost_fn)
             
         optimizer = th.GaussNewton(
             objective,
             max_iterations=num_iterations,
             step_size=0.1,
         )
-
-        v_init = torch.randn((1,3), device=self.device)
-        v_init = v_init / torch.norm(v_init, p=2, dim=-1, keepdim=True)
-        w_init = torch.randn((1,3), device=self.device)
+        
+        if init_velc is not None:
+            v_init, w_init = init_velc
+        else:
+            v_init = torch.randn((1,3), device=self.device)
+            v_init = v_init / torch.norm(v_init, p=2, dim=-1, keepdim=True)
+            w_init = torch.randn((1,3), device=self.device)
+        
         theseus_inputs = {
             "linear_velocity": v_init,
             "angular_velocity": w_init,
@@ -282,14 +301,21 @@ class PoseOptimizer:
                 theseus_inputs,
                 optimizer_kwargs={
                     "track_best_solution": True,
-                    "verbose": True,
+                    "track_state_history": True,
+                    "track_err_history": True,
+                    "verbose": False,
                 },
             )
         
         v_opt = info.best_solution["linear_velocity"] 
         w_opt = info.best_solution["angular_velocity"]
         
-        return v_opt, w_opt
+        v_history = info.state_history["linear_velocity"].view(-1, 3)
+        w_hisroty = info.state_history["angular_velocity"].view(-1, 3)
+        
+        err = info.err_history.view(-1,1)
+        
+        return v_opt, w_opt, v_history, w_hisroty, err
     
 # class S2Manifold(th.Manifold):
 #     """S2流形类，用于表示单位球面上的点"""

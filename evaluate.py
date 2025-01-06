@@ -34,7 +34,13 @@ if __name__ == "__main__":
 
     # detect cuda
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
-
+    
+    # load data
+    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/K_matrix.txt")
+    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/camera_pose.txt")
+    K_tensor = misc.load_camera_intrinsic(K_path)
+    gt_camera_pose = misc.load_camera_pose(CamPose_path)
+    
     # load model 
     flow_field = EventFlowINR(model_config).to(device)
     flow_field.load_state_dict(torch.load(config["logger"]["model_weight_path"]))
@@ -47,28 +53,40 @@ if __name__ == "__main__":
         normalize_coords=True, 
         device=device
     )
-
     t = torch.linspace(0, 1, steps=50).view(1, -1)  # shape: [1, d]
-    u, v, U, V = flow_calculator.extract_flow_from_inr(t)
+    t_mid = ((t[0, 1:] + t[0, :-1]) / 2).unsqueeze(0) 
+    u, v, U, V = flow_calculator.extract_flow_from_inr(t_mid)
 
-    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/K_matrix.txt")
+    # create optimizer
     pixel2cam = geometric.Pixel2Cam(image_size[0], image_size[1], device)
-    K_tensor = misc.load_camera_intrinsic(K_path)
     normalized_pixel_grid = pixel2cam(K_tensor.to(device))
     pose_optimizer = geometric.PoseOptimizer(image_size, device)
 
-    for i in tqdm(range(t.shape[1])):
+    for i in tqdm(range(t_mid.shape[1])):
+        # prepare flow and coordinate data
         current_flow = torch.stack([U[i], V[i]], dim=-1)
         current_flow = torch.nn.functional.pad(current_flow, (0, 1), mode='constant', value=0)
         current_coords = normalized_pixel_grid.squeeze(0).view(-1, 3)
         current_sparse_flow, indices = flow_calculator.sparsify_flow(
             current_flow,
-            sparse_ratio=0.005,
+            sparse_ratio=0.001,
             threshold=10
         )
         current_sparse_coords = current_coords[indices, :]
-        v_est, w_est = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow)
-        print(f"linear_velocity:{v_est}, angular_velocity:{w_est}")
+        
+        # get gt velocity
+        mid_timestamp = ((gt_camera_pose[i][0] + gt_camera_pose[i+1][0]) / 2.0).item()
+        v_gt, w_gt = geometric.pose2velc(mid_timestamp, gt_camera_pose)
+
+        # optimize velocity 
+        init_velc = [v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)]
+        v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, init_velc=init_velc)   
+        v_est_norm = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
+        print(f"=============================================== ITER {i} ====================================================")
+        print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
+        print(f"estimated_linear_velocity:{v_est_norm}, estimated_angular_velocity:{w_est}")
+        print(f"linear_velocity_error:{geometric.vector_angle_degree(v_est_norm, v_gt)}, linear_velocity_error:{geometric.vector_angle_degree(w_est, w_gt)}")
+       
         # visualize color optical flow
         color_flow, wheel = viz.visualize_optical_flow(
             flow_x=U[i].cpu().numpy(),
