@@ -9,6 +9,13 @@ def load_camera_intrinsic(
     K_tensor = torch.from_numpy(K).float()
     return K_tensor
 
+def load_camera_pose(
+    file_path: str
+):
+    camera_pose = np.loadtxt(file_path)
+    camera_pose_tensor = torch.from_numpy(camera_pose).float()
+    return camera_pose_tensor
+
 def process_events(
     origin_events: torch.Tensor,
     image_size: Tuple[int, int],
