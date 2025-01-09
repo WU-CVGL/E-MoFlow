@@ -36,8 +36,8 @@ if __name__ == "__main__":
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
     
     # load data
-    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/K_matrix.txt")
-    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/camera_pose.txt")
+    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/acceleration_2_0/K_matrix.txt")
+    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/acceleration_2_0/camera_pose.txt")
     K_tensor = misc.load_camera_intrinsic(K_path)
     gt_camera_pose = misc.load_camera_pose(CamPose_path)
     
@@ -80,12 +80,19 @@ if __name__ == "__main__":
 
         # optimize velocity 
         init_velc = [v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)]
-        v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, init_velc=init_velc)   
-        v_est_norm = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
+        # init_velc = None
+        # v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=True, init_velc=init_velc)
+        _, w_est, _, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=True, init_velc=init_velc)   
+        # v_est_norm = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
+        # print(f"=============================================== ITER {i} ====================================================")
+        # print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
+        # print(f"estimated_linear_velocity:{v_est_norm}, estimated_angular_velocity:{w_est}")
+        # print(f"linear_velocity_error:{geometric.vector_angle_degree(v_est_norm, v_gt)}, linear_velocity_error:{geometric.vector_angle_degree(w_est, w_gt)}")
+        
         print(f"=============================================== ITER {i} ====================================================")
         print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
-        print(f"estimated_linear_velocity:{v_est_norm}, estimated_angular_velocity:{w_est}")
-        print(f"linear_velocity_error:{geometric.vector_angle_degree(v_est_norm, v_gt)}, linear_velocity_error:{geometric.vector_angle_degree(w_est, w_gt)}")
+        print(f"estimated_linear_velocity:None, estimated_angular_velocity:{w_est}")
+        print(f"linear_velocity_error:None, linear_velocity_error:{geometric.vector_angle_degree(w_est, w_gt)}")
        
         # visualize color optical flow
         color_flow, wheel = viz.visualize_optical_flow(
