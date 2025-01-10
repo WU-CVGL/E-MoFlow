@@ -34,26 +34,56 @@ class DenseOpticalFlowCalc:
         U = u.view(num_timesteps, self.H, self.W)
         V = v.view(num_timesteps, self.H, self.W)
         
-        U, V = U * (self.W - 1), V * (self.H - 1)
+        U, V = U * (self.W - 1) * 52.63 / 908.72409, V * (self.H - 1) * 52.63 / 908.72409
         
         return u, v, U, V
     
     def sparsify_flow(self, flow, sparse_ratio=0.1, threshold=1):
-        H, W, C = flow.shape
+        H, W, C = flow.shape  
+        
         total_points = H * W
         keep_points = int(total_points * sparse_ratio)
+        num_blocks_h = int(np.sqrt(keep_points))
+        num_blocks_w = num_blocks_h
         
-        flow_flat = flow.view(-1, C)
-        random_indices = torch.randperm(total_points, device=self.device)[:keep_points]
-        sparse_flow = flow_flat[random_indices, :]
+        block_h = H // num_blocks_h
+        block_w = W // num_blocks_w
+        
+        num_blocks_h = H // block_h
+        num_blocks_w = W // block_w
+        
+        flows_list = []
+        indices_list = []
+        
+        for i in range(num_blocks_h):
+            for j in range(num_blocks_w):
+                h_start = i * block_h
+                h_end = (i + 1) * block_h
+                w_start = j * block_w
+                w_end = (j + 1) * block_w
+                
+                current_block = flow[h_start:h_end, w_start:w_end]  # [block_h, block_w, C]
+                flow_magnitude = torch.norm(current_block[..., :2], dim=-1)  # [block_h, block_w]
+                
+                max_idx = flow_magnitude.view(-1).argmax()
+                local_h = max_idx // block_w
+                local_w = max_idx % block_w
+                
+                global_h = h_start + local_h
+                global_w = w_start + local_w
+                global_idx = global_h * W + global_w
+                
+                flows_list.append(flow[global_h, global_w])
+                indices_list.append(global_idx)
+        
+        sparse_flow = torch.stack(flows_list)  # [N, C]
+        indices = torch.tensor(indices_list, device=flow.device)  # [N]
         
         if threshold is not None:
-            flow_magnitude = torch.norm(sparse_flow[..., :2], dim=-1)  # [N]
-            mask = flow_magnitude > threshold  # [N]
+            flow_magnitude = torch.norm(sparse_flow[..., :2], dim=-1)
+            mask = flow_magnitude > threshold
             valid_indices = torch.where(mask)[0]
-            sparse_flow = sparse_flow[valid_indices, :]
-            indices = random_indices[valid_indices]
-        else:
-            indices = random_indices
-            
+            sparse_flow = sparse_flow[valid_indices]
+            indices = indices[valid_indices]
+        
         return sparse_flow, indices
