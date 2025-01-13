@@ -1,6 +1,7 @@
 import math
 import torch
 import kornia
+import numpy as np
 import theseus as th
 
 from typing import Any, List, Optional, Tuple, Union
@@ -209,28 +210,63 @@ class PoseOptimizer:
         
         return torch.stack([B_1, B_2], dim=1)  # [N,2,3]
     
+    # def dec_error_fn(self, optim_vars, aux_vars):
+    #     v_vec, w_vec = optim_vars
+    #     x_batch, u_batch = aux_vars
+    #     v_vec_tensor, w_vec_tensor = v_vec.tensor, w_vec.tensor
+    #     x_batch_tensor, u_batch_tensor = x_batch.tensor, u_batch.tensor
+        
+    #     x_batch_tensor = x_batch_tensor.squeeze(0)
+    #     u_batch_tensor = u_batch_tensor.squeeze(0)
+    #     v_skew = vector_to_skew(v_vec_tensor).squeeze(0)
+    #     w_skew = vector_to_skew(w_vec_tensor).squeeze(0)
+        
+    #     # s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
+    #     wv = torch.mm(w_skew, v_skew)
+    #     # calculate v_skew @ x & s @ x
+    #     v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
+    #     s_x = torch.matmul(wv, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
+        
+    #     term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1) # [N]
+    #     term2 = torch.sum(x_batch_tensor * s_x, dim=1)  # [N]
+    #     error = term1 - term2
+        
+    #     return error.unsqueeze(0)    
+    
     def dec_error_fn(self, optim_vars, aux_vars):
         v_vec, w_vec = optim_vars
         x_batch, u_batch = aux_vars
         v_vec_tensor, w_vec_tensor = v_vec.tensor, w_vec.tensor
         x_batch_tensor, u_batch_tensor = x_batch.tensor, u_batch.tensor
         
-        x_batch_tensor = x_batch_tensor.squeeze(0)
-        u_batch_tensor = u_batch_tensor.squeeze(0)
-        v_skew = vector_to_skew(v_vec_tensor).squeeze(0)
-        w_skew = vector_to_skew(w_vec_tensor).squeeze(0)
+        x_batch_tensor = x_batch_tensor.squeeze(0)  # [N,3]
+        u_batch_tensor = u_batch_tensor.squeeze(0)  # [N,3]
+        v_skew = vector_to_skew(v_vec_tensor).squeeze(0)  # [3,3]
+        w_skew = vector_to_skew(w_vec_tensor).squeeze(0)  # [3,3]
         
-        s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
+        # 计算v̂q: [3,3] @ [N,3].T -> [3,N] -> [N,3]
+        v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
         
-        # calculate v_skew @ x & s @ x
-        v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
-        s_x = torch.matmul(s, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
+        # 计算ω̂v̂q
+        w_skew_vx = torch.matmul(w_skew, v_skew_x.transpose(0,1)).transpose(0,1)  # [N,3]
         
-        term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1) # [N]
-        term2 = torch.sum(x_batch_tensor * s_x, dim=1)  # [N]
-        error = term1 - term2
+        # 计算uᵀv̂q + qᵀω̂v̂q
+        term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1)  # [N]
+        term2 = torch.sum(x_batch_tensor * w_skew_vx, dim=1)  # [N]
+        error = term1 - term2  # [N]
         
-        return error.unsqueeze(0)    
+        # 计算归一化项 ||ê₃v̂qi||
+        e3 = torch.tensor([0., 0., 1.], device=self.device)
+        e3_skew = vector_to_skew(e3)  # [3,3]
+        
+        # e3_skew @ v_skew_x.T -> [3,N] -> [N,3]
+        norm_term = torch.matmul(e3_skew, v_skew_x.transpose(0,1)).transpose(0,1)  # [N,3]
+        norm_term = torch.norm(norm_term, dim=1)  # [N]
+        
+        # 归一化error
+        error = error / (norm_term + 1e-8)  # [N]
+        
+        return error.unsqueeze(0)  # [1,N]
     
     def rotation_error_fn(self, optim_vars, aux_vars):
         w_vec = optim_vars[0]
@@ -261,8 +297,10 @@ class PoseOptimizer:
             w = th.Vector(dof=3, name="angular_velocity") 
             optim_vars = [v, w]
             aux_vars = [x, u]
-            w_dec = th.ScaleCostWeight(1.0)
-            w_norm = th.ScaleCostWeight(0.0)  
+            w_dec_value = torch.tensor(1.0 / x.shape[1], dtype=torch.float32)
+            w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
+            w_norm_value = torch.tensor(100, dtype=torch.float32) 
+            w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
             
             dec_cost_fn = th.AutoDiffCostFunction(
                 optim_vars,
@@ -301,7 +339,7 @@ class PoseOptimizer:
             
             return [rot_cost_fn]
     
-    def optimize(self, normalized_coords, optical_flow, only_rotation=False, init_velc=None, num_iterations=1000):
+    def optimize(self, normalized_coords, optical_flow, only_rotation=False, init_velc=None, num_iterations=5000):
         # check
         assert normalized_coords.shape[-1] == 3, "[ERROR] Normalized coordinates should be in homogeneous form [x,y,1]"
         assert optical_flow.shape[-1] == 3, "[ERROR] Optical flow should be in homogeneous form [u,v,0]"
@@ -330,35 +368,28 @@ class PoseOptimizer:
                 v_init, w_init = init_velc
         else:
             if not only_rotation:
-                v_init = torch.randn((1,3), device=self.device)
-                v_init = v_init / torch.norm(v_init, p=2, dim=-1, keepdim=True)
-            w_init = torch.randn((1,3), device=self.device)
+                v_init = torch.rand((1,3), device=self.device) * 3
+                v_init = v_init / torch.norm(v_init+1e-9, p=2, dim=-1, keepdim=True)
+            w_init = torch.rand((1,3), device=self.device) * 3
         
         theseus_inputs = {
             "norm_coords": normalized_coords,
             "optical_flow": optical_flow
         }
-        
         if not only_rotation:
             theseus_inputs["linear_velocity"] = v_init
         theseus_inputs["angular_velocity"] = w_init
-        
-        # theseus_inputs = {
-        #     "linear_velocity": v_init,
-        #     "angular_velocity": w_init,
-        #     "norm_coords": normalized_coords,
-        #     "optical_flow": optical_flow
-        # }
         
         theseus_optim = th.TheseusLayer(optimizer).to(self.device)
         with torch.no_grad():
             updated_inputs, info = theseus_optim.forward(
                 theseus_inputs,
                 optimizer_kwargs={
+                    "damping": 0.1,
                     "track_best_solution": True,
                     "track_state_history": True,
                     "track_err_history": True,
-                    "verbose": False,
+                    "verbose": True,
                 },
             )
         
