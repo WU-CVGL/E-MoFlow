@@ -1,11 +1,11 @@
 data:
-  dataset_name: SimpleTest
-  data_path: "/run/determined/workdir/ssd_data/NeuEF_SimpleTest/synthetic"
+  dataset_name: SyntheticFigure
+  data_path: /run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes
   hight: 480
   weight: 640
   color_event: False
   threshold: 0.2
-  sequence_indices: [49,99]
+  sequence_indices: [0,19]
   batch_range: 15
   loader:
     num_workers: 16
@@ -14,10 +14,10 @@ data:
     pin_memory: True
 
 logger:
-  project: "test_evaluation"
-  expname: "test_pth_evaluate"
-  results_dir: "./outputs/"
-  model_weight_path: "./weights/test.pth"
+  project: Blender_final_motion_boxes
+  expname: sequence_0to19
+  results_dir: ./outputs/${project}/${expname}
+  model_weight_path: ./weights/${project}_${expname}.pth
 
 model:
   pos_encode: False
@@ -26,7 +26,7 @@ model:
 optimizer:
   initial_lrate: 1.0e-4
   final_lrate: 1.0e-6
-  num_epoch: 150
+  num_epoch: 500
 
 warp:
   num_step: 3
@@ -34,4 +34,5 @@ warp:
   solver: "euler"
 
 valid: 
-  file_idx: [49,99]
+  file_idx: [0,19]
+    
