@@ -1,214 +1,9 @@
-import math
 import torch
 import kornia
-import numpy as np
 import theseus as th
 
-from typing import Any, List, Optional, Tuple, Union
-
-def angular_velocity_to_euler_rates(omega: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
-    """
-    Convert angular velocity vector to Euler angle rates (ZYX order)
-    
-    Args:
-        omega: Angular velocity vector [wx, wy, wz]
-        q: Quaternion [w, x, y, z]
-    
-    Returns:
-        euler_rates: Euler angle rates [roll_rate, pitch_rate, yaw_rate] 
-    """
-    w, x, y, z = q
-    
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = torch.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    pitch = torch.asin(torch.clamp(sinp, -1.0, 1.0))
-
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = torch.atan2(siny_cosp, cosy_cosp)
-
-    transform = torch.tensor([
-        [1, torch.sin(roll)*torch.tan(pitch), torch.cos(roll)*torch.tan(pitch)],
-        [0, torch.cos(roll), -torch.sin(roll)],
-        [0, torch.sin(roll)/torch.cos(pitch), torch.cos(roll)/torch.cos(pitch)]
-    ])
-    
-    euler_rates = transform @ omega
-    
-    return euler_rates
-
-def compute_vector_angle_in_radians(v1: torch.Tensor, v2: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    v1_norm = torch.norm(v1, dim=-1)
-    v2_norm = torch.norm(v2, dim=-1)
-    
-    zero_mask = (v1_norm < eps) | (v2_norm < eps)
-    
-    dot_product = torch.sum(v1 * v2, dim=-1)
-    cosine = dot_product / (v1_norm * v2_norm + eps)
-    cosine = torch.clamp(cosine, -1.0 + eps, 1.0 - eps)
-    angle = torch.acos(cosine)
-    
-    angle = torch.where(zero_mask, torch.zeros_like(angle), angle)
-    return angle
-
-def compute_vector_angle_in_degrees(v1: torch.Tensor, v2: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    angle_rad = compute_vector_angle_in_radians(v1, v2, eps)
-    return angle_rad * 180 / torch.pi
-
-def quaternion_to_angular_velocity(q1: torch.Tensor, q2: torch.Tensor, dt: float) -> torch.Tensor:
-    """
-    Convert quaternion difference to angular velocity
-    
-    Args:
-        q1: First quaternion [w,x,y,z]
-        q2: Second quaternion [w,x,y,z]
-        dt: Time difference
-    
-    Returns:
-        omega: Angular velocity [3]
-    """
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    
-    omega = 2/dt * torch.tensor([
-        w1*x2 - x1*w2 - y1*z2 + z1*y2,
-        w1*y2 + x1*z2 - y1*w2 - z1*x2,
-        w1*z2 - x1*y2 + y1*x2 - z1*w2
-    ])
-    
-    return omega
-
-def slerp(q1: torch.Tensor, q2: torch.Tensor, t: float) -> torch.Tensor:
-    """Spherical Linear Interpolation between quaternions"""
-    cos_half_theta = torch.dot(q1, q2)
-    
-    if cos_half_theta < 0:
-        q2 = -q2
-        cos_half_theta = -cos_half_theta
-    
-    if cos_half_theta >= 1.0:
-        return q1
-    
-    half_theta = torch.acos(cos_half_theta)
-    sin_half_theta = torch.sqrt(1 - cos_half_theta*cos_half_theta)
-    
-    if torch.abs(sin_half_theta) < 1e-6:
-        return q1 * 0.5 + q2 * 0.5
-    
-    ratio_a = torch.sin((1 - t) * half_theta) / sin_half_theta
-    ratio_b = torch.sin(t * half_theta) / sin_half_theta
-    
-    return ratio_a * q1 + ratio_b * q2
-
-def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
-    """Convert quaternion to rotation matrix"""
-    w, x, y, z = q
-    
-    q_norm = torch.norm(q)
-    if abs(q_norm - 1.0) > 1e-2:
-        print(f"The L2 norm of q is{q_norm}, not 1")
-    
-    R = torch.tensor([
-        [1 - 2*y*y - 2*z*z, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
-        [2*x*y + 2*w*z, 1 - 2*x*x - 2*z*z, 2*y*z - 2*w*x],
-        [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x*x - 2*y*y]
-    ])
-    
-    if torch.norm(torch.mm(R, R.t()) - torch.eye(3, device=q.device, dtype=q.dtype)) > 1e-2:
-        print("Warning: Rotation matrix orthogonality check failed")
-        
-    if abs(torch.det(R) - 1.0) > 1e-2:
-        print("Warning: Rotation matrix determinant check failed")
-    return R
-
-def pose_to_velocity(timestamp: float, pose: torch.Tensor, dataset_name: str=None) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Get velocity and angular velocity at specified timestamp
-    
-    Args:
-        timestamp: Query timestamp
-        pose: Pose data tensor [N, 8] (time,x,y,z,qx,qy,qz,qw)
-        dataset_name: Name of dataset
-        
-    Returns:
-        v: Linear velocity [3]
-        omega: Angular velocity [3]
-    """
-    # Find nearest poses
-    mask_pre = pose[:,0] < timestamp
-    mask_post = pose[:,0] > timestamp
-    
-    if not torch.any(mask_pre) or not torch.any(mask_post):
-        raise ValueError("Timestamp out of bounds")
-        
-    time_pre = torch.where(mask_pre)[0][-1]
-    time_after = torch.where(mask_post)[0][0]
-
-    # Calculate velocity in world frame
-    dt = pose[time_after,0] - pose[time_pre,0]
-    v_mocap = (pose[time_after,1:4] - pose[time_pre,1:4])/dt
-    
-    # Interpolation parameter
-    p = (timestamp - pose[time_pre,0])/dt
-    
-    # Get quaternions
-    q1 = pose[time_pre,[7,4,5,6]]  # [w,x,y,z]
-    q2 = pose[time_after,[7,4,5,6]]
-    
-    # Calculate angular velocity
-    omega_mocap = quaternion_to_angular_velocity(q1, q2, dt)
-    
-    # Interpolate rotation
-    q = slerp(q1, q2, p)
-    R = quaternion_to_rotation_matrix(q)
-
-    # Transform velocities to body frame
-    v_body = R @ v_mocap
-    omega_body = R @ omega_mocap
-
-    # Transform to specific camera frame
-    if dataset_name == 'VECtor':
-        T_lcam_body = torch.tensor([
-            [-0.857137023976571, 0.03276713258773897, -0.5140451703406658, 0.09127742788053987],
-            [0.01322063096422759, -0.9962462506036175, -0.08554895133864114, -0.02255409664008403],
-            [-0.5149187674240416, -0.08012317505073682, 0.853486344222504, -0.02986309837992267],
-            [0., 0., 0., 1.]
-        ])
-        
-        T_lcam_lev = torch.tensor([
-            [0.9999407352369797, 0.009183655542749752, 0.005846920950435052, 0.0005085820608404798],
-            [-0.009131364645448854, 0.9999186289230431, -0.008908070070089353, -0.04081979450823404],
-            [-0.005928253827254812, 0.008854151768176144, 0.9999432282899994, -0.0140781304960408],
-            [0., 0., 0., 1.]
-        ])
-        
-        T_lev_body = torch.linalg.solve(T_lcam_lev, T_lcam_body)
-        R_lev_body = T_lev_body[:3,:3]
-        
-        v = R_lev_body @ v_body
-        omega = R_lev_body @ omega_body
-        
-    elif dataset_name == 'MVSEC':
-        v = v_mocap
-        omega = omega_mocap
-        
-    else:
-        # print("Warning: No Coordinates Transform Found")
-        v = v_body
-        omega = omega_body
-        
-    return v, omega
-
-def vector_to_skew_matrix(vec):
-    if len(vec.shape) == 1:
-        vec = vec.unsqueeze(0)
-        mat = kornia.geometry.conversions.vector_to_skew_symmetric_matrix(vec).squeeze(0)
-    else:
-        mat = kornia.geometry.conversions.vector_to_skew_symmetric_matrix(vec)
-    return mat
+from typing import Optional, Tuple
+from src.utils.vector_math import vector_to_skew_matrix
 
 class Pixel2Cam:
     def __init__(self, H: int, W: int, device: torch.device):
@@ -246,7 +41,6 @@ class PoseOptimizer:
         xx = x[:, 0]  # x coordinate
         yy = x[:, 1]  # y coordinate
         
-        # B矩阵的两行
         B_1 = torch.stack([xx*yy, -(1+xx*xx), yy], dim=1)  # [N,3]
         B_2 = torch.stack([1+yy*yy, -xx*yy, -xx], dim=1)   # [N,3]
         
@@ -260,14 +54,11 @@ class PoseOptimizer:
         
         x_batch_tensor = x_batch_tensor.squeeze(0)
         u_batch_tensor = u_batch_tensor.squeeze(0)
-        v_skew = vector_to_skew(v_vec_tensor).squeeze(0)
-        w_skew = vector_to_skew(w_vec_tensor).squeeze(0)
+        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)
+        w_skew = vector_to_skew_matrix(w_vec_tensor).squeeze(0)
         
         s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
-        # wv = torch.mm(w_skew, v_skew)
-        # calculate v_skew @ x & s @ x
-        # for x,u in x_batch_tensor, u_batch_tensor:
-            
+        
         v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
         s_x = torch.matmul(s, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
         
@@ -277,41 +68,6 @@ class PoseOptimizer:
         
         return error.unsqueeze(0)    
     
-    # def dec_error_fn(self, optim_vars, aux_vars):
-    #     v_vec, w_vec = optim_vars
-    #     x_batch, u_batch = aux_vars
-    #     v_vec_tensor, w_vec_tensor = v_vec.tensor, w_vec.tensor
-    #     x_batch_tensor, u_batch_tensor = x_batch.tensor, u_batch.tensor
-        
-    #     x_batch_tensor = x_batch_tensor.squeeze(0)  # [N,3]
-    #     u_batch_tensor = u_batch_tensor.squeeze(0)  # [N,3]
-    #     v_skew = vector_to_skew(v_vec_tensor).squeeze(0)  # [3,3]
-    #     w_skew = vector_to_skew(w_vec_tensor).squeeze(0)  # [3,3]
-        
-    #     # 计算v̂q: [3,3] @ [N,3].T -> [3,N] -> [N,3]
-    #     v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
-        
-    #     # 计算ω̂v̂q
-    #     w_skew_vx = torch.matmul(w_skew, v_skew_x.transpose(0,1)).transpose(0,1)  # [N,3]
-        
-    #     # 计算uᵀv̂q + qᵀω̂v̂q
-    #     term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1)  # [N]
-    #     term2 = torch.sum(x_batch_tensor * w_skew_vx, dim=1)  # [N]
-    #     error = term1 - term2  # [N]
-        
-    #     # 计算归一化项 ||ê₃v̂qi||
-    #     e3 = torch.tensor([0., 0., 1.], device=self.device)
-    #     e3_skew = vector_to_skew(e3)  # [3,3]
-        
-    #     # e3_skew @ v_skew_x.T -> [3,N] -> [N,3]
-    #     norm_term = torch.matmul(e3_skew, v_skew_x.transpose(0,1)).transpose(0,1)  # [N,3]
-    #     norm_term = torch.norm(norm_term, dim=1)  # [N]
-        
-    #     # 归一化error
-    #     error = error / (norm_term + 1e-8)  # [N]
-        
-    #     return error.unsqueeze(0)  # [1,N]
-    
     def rotation_error_fn(self, optim_vars, aux_vars):
         w_vec = optim_vars[0]
         x_batch, u_batch = aux_vars
@@ -319,13 +75,11 @@ class PoseOptimizer:
         x_batch_tensor = x_batch.tensor.squeeze(0)  # [N,3]
         u_batch_tensor = u_batch.tensor.squeeze(0)  # [N,3]
         
-        # 计算B(x)ω
         B = self.compute_B_matrix(x_batch_tensor)  # [N,2,3]
         est_flow = (B @ w_vec_tensor.t()).squeeze(-1)
 
-        # 计算误差
         error = u_batch_tensor[..., :2] - est_flow  # [N,2]
-        return error.reshape(-1).unsqueeze(0)  # 展平误差向量
+        return error.reshape(-1).unsqueeze(0)  
     
     def velocity_constraint_fn(self, optim_vars, aux_vars=None):
         v_vec = optim_vars[0]
