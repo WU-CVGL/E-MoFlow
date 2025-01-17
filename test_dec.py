@@ -5,7 +5,9 @@ from tqdm import tqdm
 from pathlib import Path
 
 from src.utils import misc
+from src.utils import pose
 from src.model import geometric
+from src.utils import vector_math
 from src.utils import load_config
 from src.model.inr import EventFlowINR
 from src.utils.wandb import WandbLogger
@@ -77,7 +79,7 @@ if __name__ == "__main__":
     #         continue
     #     v_gt, w_gt = geometric.pose2velc(gt_camera_pose[i,0], gt_camera_pose)
     #     print(v_gt, w_gt, i)
-    v_gt, w_gt = geometric.pose_to_velocity(0.001, gt_camera_pose)
+    v_gt, w_gt = pose.pose_to_velocity(0.001, gt_camera_pose)
     v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
     
     normalized_pixel_grid = normalized_pixel_grid.squeeze(0)
@@ -118,5 +120,5 @@ if __name__ == "__main__":
     print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
     print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
     print(f"estimated_linear_velocity:{v_est}, estimated_angular_velocity:{w_est}")
-    print(f"linear_velocity_error:{geometric.compute_vector_angle_in_degrees(v_est.to(device), v_gt)}, angular_velocity_error:{geometric.compute_vector_angle_in_degrees(w_est.to(device), w_gt)}")
+    print(f"linear_velocity_error:{vector_math.compute_vector_angle_in_degrees(v_est.to(device), v_gt)}, angular_velocity_error:{vector_math.compute_vector_angle_in_degrees(w_est.to(device), w_gt)}")
     print(f"dec_last_error:{err_his[-1]}")
