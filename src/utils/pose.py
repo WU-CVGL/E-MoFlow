@@ -142,9 +142,13 @@ def pose_to_velocity(timestamp: float, pose: torch.Tensor, dataset_name: str=Non
     # Interpolate rotation
     q = slerp(q1, q2, p)
     R = quaternion_to_rotation_matrix(q)
+    
+    R_cam = torch.Tensor([[0, -1, 0],
+                    [0, 0, -1],
+                    [1, 0, 0]]) @ R
 
     # Transform velocities to body frame
-    v_body = R @ v_mocap
+    v_body = R_cam @ v_mocap
     omega_body = R @ omega_mocap
 
     # Transform to specific camera frame
