@@ -143,6 +143,7 @@ def pose_to_velocity(timestamp: float, pose: torch.Tensor, dataset_name: str=Non
     q = slerp(q1, q2, p)
     R = quaternion_to_rotation_matrix(q)
     
+    #================= only for Blender! =================#
     R_cam = torch.Tensor([[0, -1, 0],
                     [0, 0, -1],
                     [1, 0, 0]]) @ R
