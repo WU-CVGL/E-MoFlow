@@ -97,16 +97,14 @@ class PoseOptimizer:
             aux_vars = [x, u]
             w_dec_value = torch.tensor(1.0 / x.shape[1], dtype=torch.float32)
             w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
-            # w_dec = th.ScaleCostWeight(1.0)
             w_norm_value = torch.tensor(100, dtype=torch.float32) 
             w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
-            # w_norm = th.ScaleCostWeight(100.0)
         
             dec_cost_fn = th.AutoDiffCostFunction(
                 optim_vars,
                 self.dec_error_fn,
                 x.shape[1],
-                # w_dec,
+                w_dec,
                 aux_vars=aux_vars,
                 name="dec_cost_fn"
             )
@@ -126,7 +124,8 @@ class PoseOptimizer:
             w = th.Vector(dof=3, name="angular_velocity")
             optim_vars = [w]
             aux_vars = [x, u]
-            w_rot = th.ScaleCostWeight(1.0)
+            w_rot_value = torch.tensor(1.0 / (x.shape[1] * 2), dtype=torch.float32)
+            w_rot = th.ScaleCostWeight(torch.sqrt(w_rot_value))
             
             rot_cost_fn = th.AutoDiffCostFunction(
                 optim_vars,
