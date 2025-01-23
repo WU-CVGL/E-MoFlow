@@ -30,9 +30,10 @@ def load_camera_pose(
 def process_events(
     origin_events: torch.Tensor,
     image_size: Tuple[int, int],
-    start_end: Tuple[float, float],
-    normalize_coords: bool = True,
-    normalize_time: bool = True
+    intrinsic_mat: torch.Tensor,
+    start_end: Tuple[float,  float],
+    normalize_time: bool = True,
+    normalize_coords_mode: str = "CAMERA_PLANE"
 ) -> torch.Tensor:
     """
     Load and process event data files, converting them into normalized tensor vectors.
@@ -65,11 +66,21 @@ def process_events(
     # Normalize timestamps if requested
     if normalize_time:
         norm_timestamps = (timestamps - start_end[0]) / (start_end[1] - start_end[0])
+    else:
+        normalize_time = timestamps
     
     # Normalize coordinates if requested
-    if normalize_coords:
+    if normalize_coords_mode == "UV_SPACE":
         norm_x_coords = x_coords / (image_size[1] - 1)  # Width
         norm_y_coords = y_coords / (image_size[0] - 1)  # Height
+    elif normalize_coords_mode == "CAMERA_PLANE":
+        fx, fy = intrinsic_mat[0,0], intrinsic_mat[1,1]
+        cx, cy = intrinsic_mat[0,2], intrinsic_mat[1,2]
+        norm_x_coords = (x_coords - cx) / fx
+        norm_y_coords = (y_coords - cy) / fy
+    else:
+        norm_x_coords = x_coords
+        norm_y_coords = y_coords
     
     # Combine back into tensor
     processed_events = torch.stack([norm_timestamps, norm_x_coords, norm_y_coords, polarities], axis=1)

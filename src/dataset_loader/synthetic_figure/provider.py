@@ -34,7 +34,10 @@ class SyntheticFigureDataProvider(Dataset):
         events_norm = misc.process_events(
             origin_events=events,
             image_size=(self.H, self.W),
-            start_end=(self.t_start,self.t_end)
+            intrinsic_mat=self.K,
+            start_end=(self.t_start,self.t_end),
+            normalize_time=True,
+            normalize_coords_mode="CAMERA_PLANE"
         )
 
         train_batch_data : Dict[str, Any] = {
@@ -58,7 +61,10 @@ class SyntheticFigureDataProvider(Dataset):
         valid_events_norm = misc.process_events(
             origin_events=valid_events,
             image_size=(self.H, self.W),
-            start_end=(self.t_start,self.t_end)
+            intrinsic_mat=self.K,
+            start_end=(self.t_start,self.t_end),
+            normalize_time=True,
+            normalize_coords_mode="CAMERA_PLANE"
         )
 
         valid_batch_data : Dict[str, Any] = {
