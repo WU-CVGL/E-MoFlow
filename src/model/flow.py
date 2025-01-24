@@ -1,24 +1,42 @@
 import torch 
 import numpy as np
 
+from typing import List
 from src.model.inr import EventFlowINR
 
 class DenseOpticalFlowCalc:
-    def __init__(self, grid_size, model: EventFlowINR, normalize_coords=True, device="cuda"):
+    def __init__(
+        self, 
+        grid_size: List,
+        intrinsic_mat: torch.Tensor, 
+        model: EventFlowINR, 
+        normalize_coords_mode="NORM_PLANE", 
+        device="cuda"
+    ):
         self.H, self.W = grid_size
         x, y = np.meshgrid(np.arange(self.W), np.arange(self.H))
         x = torch.tensor(x, dtype=torch.float32).view(-1)
         y = torch.tensor(y, dtype=torch.float32).view(-1)
-        if normalize_coords:
+        
+        if normalize_coords_mode == "UV_SPACE":
             x = x / (self.W - 1)
             y = y / (self.H - 1)
+        elif normalize_coords_mode == "NORM_PLANE":
+            fx, fy = intrinsic_mat[0,0], intrinsic_mat[1,1]
+            cx, cy = intrinsic_mat[0,2], intrinsic_mat[1,2]
+            x = (x - cx) / fx
+            y = (y - cy) / fy
+        else:
+            pass
+        
         self.x = x.to(device)
         self.y = y.to(device)
-
+        self.K = intrinsic_mat
         self.model = model
         self.device = device
+        self.normalize_coords_mode = normalize_coords_mode
 
-    def extract_flow_from_inr(self, t):
+    def extract_flow_from_inr(self, t, time_scale):
         num_points = self.x.shape[0]
         num_timesteps = t.shape[1]
         x_batch = self.x.repeat(num_timesteps)
@@ -31,12 +49,17 @@ class DenseOpticalFlowCalc:
         
         u = flow[:, 0].view(num_timesteps, num_points)
         v = flow[:, 1].view(num_timesteps, num_points)
-        U = u.view(num_timesteps, self.H, self.W)
-        V = v.view(num_timesteps, self.H, self.W)
+        U_norm = u.view(num_timesteps, self.H, self.W)
+        V_norm = v.view(num_timesteps, self.H, self.W)
         
-        U, V = U * (self.W - 1) * 52.63 / 908.72409, V * (self.H - 1) * 52.63 / 908.72409
-        
-        return u, v, U, V
+        if self.normalize_coords_mode == "UV_SPACE":
+            U, V = U_norm * (self.W - 1) * time_scale, V_norm * (self.H - 1) * time_scale
+        elif self.normalize_coords_mode == "NORM_PLANE":
+            fx, fy = self.K[0,0], self.K[1,1]
+            U, V = U_norm * fx * time_scale, V_norm * fy * time_scale
+        else:
+            U, V = U_norm * time_scale, V_norm * time_scale
+        return U, V, U_norm, V_norm
     
     def sparsify_flow(self, flow, sparse_ratio=0.1, threshold=1):
         H, W, C = flow.shape  

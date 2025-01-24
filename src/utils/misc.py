@@ -1,7 +1,8 @@
+import os
 import torch
 import random
 import numpy as np
-from typing import List, Tuple, Union
+from typing import List, Union
 
 def fix_random_seed(seed_idx=666) -> None:
     random.seed(seed_idx)
@@ -26,6 +27,34 @@ def load_camera_pose(
     camera_pose = np.loadtxt(file_path)
     camera_pose_tensor = torch.from_numpy(camera_pose).float()
     return camera_pose_tensor
+
+def load_time_stamps(
+    file_path: str
+):
+    timestamps = np.loadtxt(file_path)[:,0]
+    timestamps_tensor = torch.from_numpy(timestamps).float()
+    return timestamps_tensor
+
+def get_sorted_txt_paths(folder_path: str) -> list:
+    """
+    Get sorted list of txt file paths from a folder.
+    
+    Args:
+        folder_path (str): Path to the folder containing txt files
+        
+    Returns:
+        list: Sorted list of txt file paths
+    """
+    # Get all txt files
+    txt_files = [f for f in os.listdir(folder_path) if f.endswith('.txt')]
+    
+    # Sort files based on the numeric value in filename
+    txt_files.sort(key=lambda x: int(x.split('.')[0]))
+    
+    # Create full paths
+    txt_paths = [os.path.join(folder_path, f) for f in txt_files]
+    
+    return txt_paths
 
 def get_filenames(file_list: List[str], indices: Union[List[int], int]) -> List[str]:
     """
