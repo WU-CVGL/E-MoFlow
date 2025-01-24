@@ -1,24 +1,21 @@
 import os
 import sys
-import time
-import random
 import logging
 import cv2 as cv2
-import numpy as np
 
 import torch 
-import torch.nn as nn
 import torch.optim as optim
 
 from tqdm import tqdm
 
 from src.loss import focus
+from src.utils import misc
+from src.utils import event_proc
 from src.utils import load_config
 from src.model.inr import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp
 from src.utils.timer import TimeAnalyzer
-from src.event_data import EventStreamData
 from src.dataset_loader import dataset_manager
 from src.utils.event_image_converter import EventImageConverter
 
@@ -33,17 +30,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# set seeds
-def fix_random_seed(seed_idx=666) -> None:
-    random.seed(seed_idx)
-    np.random.seed(seed_idx)
-    torch.manual_seed(seed_idx)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed_idx)
-        torch.cuda.manual_seed_all(seed_idx)  
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 if __name__ == "__main__":
     # load configs
@@ -62,14 +48,14 @@ if __name__ == "__main__":
     logger.info(f"Use device: {device}")
 
     # fix seed
-    fix_random_seed()
+    misc.fix_random_seed()
 
     # load dataset 
     dataset_name = data_config.pop('dataset_name')
     dataloader_config = data_config.pop('loader')
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
     loader, provider = dataset_manager.create_loader(dataset, dataloader_config)
-    camera_K = provider.get_camera_K()
+    camera_K = provider.get_camera_K().to(device)
     
     # event2img converter
     image_size = (data_config["hight"], data_config["weight"])
@@ -87,7 +73,7 @@ if __name__ == "__main__":
     valid_events = valid_data["events"]
     valid_events_norm = valid_data["events_norm"]
     valid_events_timestamps = valid_data["timestamps"]
-    valid_batch_txy = valid_events_norm[:, :-1].float().to(device)
+    valid_norm_txy = valid_events_norm[:, :-1].float().to(device)
 
     # display origin valid data
     valid_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
@@ -110,23 +96,29 @@ if __name__ == "__main__":
             events = sample["events"].squeeze(0)
             events_norm = sample["events_norm"].squeeze(0)
             timestamps = sample["timestamps"].squeeze(0)
-            batch_txy = events_norm[:, :-1].float().to(device)
+            norm_txy = events_norm[:, :-1].float().to(device)
             origin_iwe = converter.create_iwes(events[:, [2,1,0,3]])
 
             # get t_ref
-            ref = warpper.get_reference_time(batch_txy, warp_config["tref_setting"])
+            ref = warpper.get_reference_time(norm_txy, warp_config["tref_setting"])
 
             # odewarp 
-            warped_batch_txy = warpper.warp_events(batch_txy, ref, method=warp_config["solver"])
+            warped_norm_txy = warpper.warp_events(norm_txy, ref, method=warp_config["solver"])
 
             # create image warped event    
-            num_iwe = warped_batch_txy.shape[0]
-            num_events = warped_batch_txy.shape[1]
+            num_iwe = warped_norm_txy.shape[0]
+            num_events = warped_norm_txy.shape[1]
             polarity = events[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1).to(device)
-            warped_events_xytp = torch.cat((warped_batch_txy[..., [2,1,0]], polarity), dim=2)
-            warped_events_xytp[..., :2] *= torch.Tensor(image_size).to(device)
+            warped_norm_xytp = torch.cat((warped_norm_txy[..., [1,2,0]], polarity), dim=2)
+            warped_events = event_proc.normalized_plane_to_pixel(
+                warped_norm_xytp, 
+                camera_K
+            )
+            # (x,y,t,p) ——> (y,x,t,p)
+            warped_events = warped_events[...,[1,0,2,3]]
+            # events should be reorganized as (y,x,t,p) that can processed by create_iwes
             iwes = converter.create_iwes(
-                events=warped_events_xytp,
+                events=warped_events,
                 method="bilinear_vote",
                 sigma=1.0,
                 blur=True
@@ -168,16 +160,22 @@ if __name__ == "__main__":
         if (i+1) % 10 == 0:
             time_analyzer.start_valid()
             with torch.no_grad():
-                valid_ref = warpper.get_reference_time(valid_batch_txy, "min")
-                valid_warped_batch_txy = warpper.warp_events(valid_batch_txy, valid_ref, method=warp_config["solver"])
+                valid_ref = warpper.get_reference_time(valid_norm_txy, "min")
+                valid_warped_norm_txy = warpper.warp_events(valid_norm_txy, valid_ref, method=warp_config["solver"])
                 # create image warped event 
-                num_iwe_valid = valid_warped_batch_txy.shape[0]
-                num_events_valid = valid_warped_batch_txy.shape[1]          
+                num_iwe_valid = valid_warped_norm_txy.shape[0]
+                num_events_valid = valid_warped_norm_txy.shape[1]          
                 valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
-                valid_warped_batch_txy = torch.cat((valid_warped_batch_txy[..., [2,1,0]], valid_polarity), dim=2)
-                valid_warped_batch_txy[..., :2] *= torch.Tensor(image_size).to(device)
+                valid_warped_norm_xytp = torch.cat((valid_warped_norm_txy[..., [1,2,0]], valid_polarity), dim=2)
+                
+                valid_warped_events = event_proc.normalized_plane_to_pixel(
+                    valid_warped_norm_xytp, 
+                    camera_K
+                )
+                valid_warped_events = valid_warped_events[...,[1,0,2,3]]
+            
                 optimized_iwe = converter.create_iwes(
-                    events=valid_warped_batch_txy,
+                    events=valid_warped_events,
                     method="bilinear_vote",
                     sigma=1.0,
                     blur=False
