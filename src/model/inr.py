@@ -6,7 +6,7 @@ from src.model import embedder
 from typing import Dict
 
 class EventFlowINR(nn.Module):
-    def __init__(self, config, D=4, W=128, input_ch=3, output_ch=2, skips=[2]):
+    def __init__(self, config, D=12, W=256, input_ch=3, output_ch=2, skips=[2]):
         super().__init__()
         self.config = config
         self.D = D
