@@ -16,60 +16,37 @@ def normalized_plane_to_pixel(
     Convert events coordinates from normalized camera plane to pixel coordinates.
     
     Args:
-        events (torch.Tensor): Event data tensor of shape (N, 4) with columns (x, y, t, p)
-                             where x,y are in normalized camera plane
-        intrinsic_mat (torch.Tensor): Camera intrinsic matrix of shape (3, 3)
+        events (torch.Tensor): Event data tensor of shape (B, N, 4) with columns (x, y, t, p)
+                             where x,y are in normalized camera plane, B is batch size
+        intrinsic_mat (torch.Tensor): Camera intrinsic matrix of shape (B, 3, 3) or (3, 3)
     
     Returns:
-        torch.Tensor: Converted events of shape (N, 4) with columns (x, y, t, p)
+        torch.Tensor: Converted events of shape (B, N, 4) with columns (x, y, t, p)
                      where x,y are in pixel coordinates
     """
+    # Handle single intrinsic matrix case
+    if intrinsic_mat.dim() == 2:
+        intrinsic_mat = intrinsic_mat.unsqueeze(0).expand(events.size(0), -1, -1)
+    
     # Extract camera intrinsics
-    fx = intrinsic_mat[0,0]  # focal length x
-    fy = intrinsic_mat[1,1]  # focal length y
-    cx = intrinsic_mat[0,2]  # principal point x
-    cy = intrinsic_mat[1,2]  # principal point y
+    fx = intrinsic_mat[:, 0, 0].unsqueeze(1)  # shape: (B, 1)
+    fy = intrinsic_mat[:, 1, 1].unsqueeze(1)  # shape: (B, 1)
+    cx = intrinsic_mat[:, 0, 2].unsqueeze(1)  # shape: (B, 1)
+    cy = intrinsic_mat[:, 1, 2].unsqueeze(1)  # shape: (B, 1)
     
     # Extract normalized plane coordinates
-    x_norm = events[:, 0]
-    y_norm = events[:, 1]
+    x_norm = events[:, :, 0]  # shape: (B, N)
+    y_norm = events[:, :, 1]  # shape: (B, N)
     
     # Convert to pixel coordinates
     # For pinhole camera model: u = fx * x + cx, v = fy * y + cy
-    x_pixel = fx * x_norm + cx
+    x_pixel = fx * x_norm + cx  # Broadcasting: (B, 1) * (B, N) + (B, 1) -> (B, N)
     y_pixel = fy * y_norm + cy
     
     # Create output tensor keeping timestamp and polarity unchanged
-    output_events = torch.stack([x_pixel, y_pixel, events[:, 2], events[:, 3]], dim=1)
+    output_events = torch.stack([x_pixel, y_pixel, events[:, :, 2], events[:, :, 3]], dim=2)
     
     return output_events
-
-def filter_events_by_image_size(
-    events: torch.Tensor,
-    width: int,
-    height: int
-) -> torch.Tensor:
-    """
-    Filter out events whose pixel coordinates are outside image boundaries.
-    
-    Args:
-        events (torch.Tensor): Event data tensor of shape (N, 4) with columns (x, y, t, p)
-                             where x,y are pixel coordinates
-        width (int): Image width in pixels
-        height (int): Image height in pixels
-    
-    Returns:
-        torch.Tensor: Filtered events tensor of shape (M, 4), M <= N, containing only valid events
-    """
-    # Create mask for valid pixel coordinates
-    # x should be in [0, width-1], y should be in [0, height-1]
-    mask = (events[:, 0] >= 0) & (events[:, 0] < width) & \
-           (events[:, 1] >= 0) & (events[:, 1] < height)
-    
-    # Apply mask to filter events
-    valid_events = events[mask]
-    
-    return valid_events
 
 def normalize_events(
     origin_events: torch.Tensor,
