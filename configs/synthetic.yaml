@@ -1,11 +1,11 @@
 data:
   dataset_name: SyntheticFigure
-  data_path: /run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes
+  data_path: /run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall
   hight: 480
   weight: 640
   color_event: False
   threshold: 0.2
-  sequence_indices: [0,19]
+  sequence_indices: [0,49]
   batch_range: 15
   loader:
     num_workers: 16
@@ -14,26 +14,26 @@ data:
     pin_memory: True
 
 logger:
-  project: Blender_final_motion_boxes
-  expname: sequence_0to19
+  project: Blender_final_motion_oneWall
+  expname: sequence_0to49_D12W256
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
 model:
   pos_encode: False
-  multires: 10
+  multires: 2
 
 optimizer:
   initial_lrate: 1.0e-4
   final_lrate: 1.0e-6
-  num_epoch: 200
+  num_epoch: 300
 
 warp:
   num_step: 3
-  tref_setting: "multi"
+  tref_setting: "random"
   solver: "euler"
 
 valid: 
-  file_idx: [0,19]
+  file_idx: [0,49]
 
     
