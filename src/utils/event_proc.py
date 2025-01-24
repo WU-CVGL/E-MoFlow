@@ -1,130 +1,134 @@
-import os
 import math
 import h5py
 import torch
 import numba
 import weakref
-import cv2 as cv
 import numpy as np
 
 from pathlib import Path
 from typing import Union, Dict, Tuple
 
-class EventData():
-    def __init__(self, data: Union[np.ndarray, torch.Tensor], H, W, device: torch.device):
-        if isinstance(data, np.ndarray):
-            assert (
-                data.shape[1] == 4 and data.ndim == 2
-            ), f"[ERROR] {self} Can not be recognized as an event stream due to incorrect format!"
-        elif isinstance(data, torch.Tensor):
-            assert (
-               data.shape[1] == 4 and data.dim() == 2 
-            ), f"[ERROR] {self} Can not be recognized as an event stream due to incorrect format!"
-
-        self.events = data
-        self.device = device
-        self.H = H
-        self.W = W
-        self.event_image = None
+def normalized_plane_to_pixel(
+    events: torch.Tensor,
+    intrinsic_mat: torch.Tensor
+) -> torch.Tensor:
+    """
+    Convert events coordinates from normalized camera plane to pixel coordinates.
     
-    def __len__(self):
-        return self.events[0]
-
-    def to_event_image(self) -> Union[np.ndarray, torch.tensor]:
-        ts = self.events[:, 0]
-        xs = self.events[:, 1]
-        ys = self.events[:, 2]
-        ps = self.events[:, 3]
-        ps[ps == 0] = -1
-        out = np.zeros((self.H, self.W))
-
-        if self.device.type == "cpu":
-            for i in range(xs.shape[0]):
-                x, y, p = xs[i], ys[i], ps[i]
-                out[int(y), int(x)] += int(p)
-            self.event_image = out
-        elif self.device.type == "cuda":
-            with torch.no_grad():
-                # spare tensor
-                indices_array = np.array([ys, xs])
-                indices_tensor = torch.tensor(indices_array, dtype = torch.long)
-                values = torch.tensor(ps, dtype = torch.float32)
-                size = torch.Size([out.shape[0], out.shape[1]])
-                out_sparse = torch.sparse_coo_tensor(indices_tensor, values, size)
-                # dense tensor
-                out_tensor = torch.from_numpy(out).to(self.device)
-                out_tensor += out_sparse.to_dense().to(self.device)
-                self.event_image = out_tensor.cpu().numpy()
-        return self.event_image
+    Args:
+        events (torch.Tensor): Event data tensor of shape (N, 4) with columns (x, y, t, p)
+                             where x,y are in normalized camera plane
+        intrinsic_mat (torch.Tensor): Camera intrinsic matrix of shape (3, 3)
     
-    def to_array(self) -> None:
-        if isinstance(self.events, np.ndarray):
-            pass
-        elif isinstance(self.events, torch.Tensor):
-            self.events = self.events.cpu().numpy() if self.events.is_cuda else self.events.numpy()
-
-    def to_tensor(self) -> None:
-        if isinstance(self.events, np.ndarray):
-            self.events = torch.from_numpy(self.events).to(self.device)
-        elif isinstance(self.events, torch.Tensor):
-            pass
-
-class EventStreamData():
-    def __init__(self, data_path, t_start, t_end, H, W, color_event, event_thresh, device: torch.device):
-        self.data_path = data_path
-        self.t_start = t_start
-        self.t_end = t_end
-        self.H, self.W = H, W
-        self.color_event = color_event
-        self.event_thresh = event_thresh
-        self.device = device
-
-        self.events = self.load_events()
-        
-    def load_events(self):
-        _, file_extension = os.path.splitext(self.data_path)
-        if file_extension == ".txt":
-            events = np.loadtxt(self.data_path)
-        elif file_extension == ".npy":
-            events = np.load(self.data_path, allow_pickle=True)
-
-        if self.H > self.W:
-            self.H, self.W = self.W, self.H
-            events = events[:, [0, 2, 1, 3]]
-            
-        if events.shape[0] == 0:
-            raise ValueError(f'No events in [{self.t_start}, {self.t_end}]!')
-        print(f'Loaded {events.shape[0]} events in [{self.t_start}, {self.t_end}] ...')
-        print(f'First event: {events[0]}')
-        print(f'Last event: {events[-1]}')
-        return events
+    Returns:
+        torch.Tensor: Converted events of shape (N, 4) with columns (x, y, t, p)
+                     where x,y are in pixel coordinates
+    """
+    # Extract camera intrinsics
+    fx = intrinsic_mat[0,0]  # focal length x
+    fy = intrinsic_mat[1,1]  # focal length y
+    cx = intrinsic_mat[0,2]  # principal point x
+    cy = intrinsic_mat[1,2]  # principal point y
     
-    def stack_event_images(self, num_frames):
-        print(f'Stacking {num_frames} event frames from {self.events.shape[0]} events ...')
-        event_chunks = np.array_split(self.events, num_frames)
-        event_images, event_timestamps = [], []
-        for i, event_chunk in enumerate(event_chunks):
-            event_image = EventData(event_chunk, self.H, self.W, device = self.device).to_event_image()
-            # if self.color_event:
-            #     event_image = quad_bayer_to_rgb_d2(event_image)
-            event_image *= self.event_thresh
-            event_images.append(event_image)
-            event_timestamps.append((event_chunk[0, 0] + event_chunk[-1, 0]) / 2)
-        
-        event_images = np.stack(event_images, axis=0).reshape(num_frames, self.H, self.W)
-        self.event_images = torch.as_tensor(event_images).float().to(self.device)
-        event_image_timestamps = np.stack(event_timestamps, axis=0).reshape(num_frames, 1)
-        self.event_image_timestamps = torch.as_tensor(event_image_timestamps).float().to(self.device)
+    # Extract normalized plane coordinates
+    x_norm = events[:, 0]
+    y_norm = events[:, 1]
     
-    def visuailize_event_images(self):
-        rgb_image = np.full((self.H, self.W, 3), fill_value=255,dtype='uint8')
-        for i, event_image in enumerate(self.event_images):
-            event_image = event_image.cpu().detach().numpy()
-            print(event_image.shape)
-            rgb_image[event_image==0]=[255,255,255]
-            rgb_image[event_image<=(-1*self.event_thresh)]=[255,0,0]
-            rgb_image[event_image>=(1*self.event_thresh)]=[0,0,255]
-            cv.imwrite(f"event_image_{i}.png", rgb_image)
+    # Convert to pixel coordinates
+    # For pinhole camera model: u = fx * x + cx, v = fy * y + cy
+    x_pixel = fx * x_norm + cx
+    y_pixel = fy * y_norm + cy
+    
+    # Create output tensor keeping timestamp and polarity unchanged
+    output_events = torch.stack([x_pixel, y_pixel, events[:, 2], events[:, 3]], dim=1)
+    
+    return output_events
+
+def filter_events_by_image_size(
+    events: torch.Tensor,
+    width: int,
+    height: int
+) -> torch.Tensor:
+    """
+    Filter out events whose pixel coordinates are outside image boundaries.
+    
+    Args:
+        events (torch.Tensor): Event data tensor of shape (N, 4) with columns (x, y, t, p)
+                             where x,y are pixel coordinates
+        width (int): Image width in pixels
+        height (int): Image height in pixels
+    
+    Returns:
+        torch.Tensor: Filtered events tensor of shape (M, 4), M <= N, containing only valid events
+    """
+    # Create mask for valid pixel coordinates
+    # x should be in [0, width-1], y should be in [0, height-1]
+    mask = (events[:, 0] >= 0) & (events[:, 0] < width) & \
+           (events[:, 1] >= 0) & (events[:, 1] < height)
+    
+    # Apply mask to filter events
+    valid_events = events[mask]
+    
+    return valid_events
+
+def normalize_events(
+    origin_events: torch.Tensor,
+    image_size: Tuple[int, int],
+    intrinsic_mat: torch.Tensor,
+    start_end: Tuple[float,  float],
+    normalize_time: bool = True,
+    normalize_coords_mode: str = "CAMERA_PLANE"
+) -> torch.Tensor:
+    """
+    Load and process event data files, converting them into normalized tensor vectors.
+    
+    Args:
+        events (torch.Tensor): original event data
+        image_size (Tuple[int, int]): Target image size as (height, width)
+        start_end Tuple[float, float]: the start and end timestamps of whole sequence
+        normalize_coords (bool): Whether to normalize spatial coordinates
+        normalize_time (bool): Whether to normalize timestamps
+    
+    Returns:
+        torch.Tensor: Processed event data as a tensor with shape (N, 4) where N is 
+                   the total number of valid events and columns are (t, x, y, p)
+    """
+
+    # Mask and sort
+    mask = (0 <= origin_events[:, 1]) & (origin_events[:, 1] < image_size[1]) & \
+            (0 <= origin_events[:, 2]) & (origin_events[:, 2] < image_size[0])
+    events = origin_events[mask]
+    events_sorted, sort_indices = torch.sort(events[:, 0])
+    events_sorted = events[sort_indices]
+
+    # Extract components
+    timestamps = events_sorted[:, 0]
+    x_coords = events_sorted[:, 1]
+    y_coords = events_sorted[:, 2]
+    polarities = events_sorted[:, 3]
+    
+    # Normalize timestamps if requested
+    if normalize_time:
+        norm_timestamps = (timestamps - start_end[0]) / (start_end[1] - start_end[0])
+    else:
+        normalize_time = timestamps
+    
+    # Normalize coordinates if requested
+    if normalize_coords_mode == "UV_SPACE":
+        norm_x_coords = x_coords / (image_size[1] - 1)  # Width
+        norm_y_coords = y_coords / (image_size[0] - 1)  # Height
+    elif normalize_coords_mode == "CAMERA_PLANE":
+        fx, fy = intrinsic_mat[0,0], intrinsic_mat[1,1]
+        cx, cy = intrinsic_mat[0,2], intrinsic_mat[1,2]
+        norm_x_coords = (x_coords - cx) / fx
+        norm_y_coords = (y_coords - cy) / fy
+    else:
+        norm_x_coords = x_coords
+        norm_y_coords = y_coords
+    
+    # Combine back into tensor
+    processed_events = torch.stack([norm_timestamps, norm_x_coords, norm_y_coords, polarities], axis=1)
+    return processed_events
 
 class EventSlicer:
     def __init__(self, h5f: h5py.File):

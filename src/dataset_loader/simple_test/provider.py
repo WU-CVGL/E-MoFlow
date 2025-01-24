@@ -4,6 +4,7 @@ import logging
 import numpy as np
 
 from src.utils import misc
+from src.utils import event_proc
 from typing import Dict, Any, Union, List
 from torch.utils.data import Dataset
 
@@ -27,7 +28,7 @@ class SimpleTestDataProvider(Dataset):
         event_data_list = [np.loadtxt(file) for file in event_file_paths]
         events = torch.from_numpy(np.vstack(event_data_list))
 
-        events_norm = misc.process_events(
+        events_norm = event_proc.normalize_events(
             origin_events=events,
             image_size=(self.H, self.W),
             start_end=(self.t_start,self.t_end)
@@ -51,7 +52,7 @@ class SimpleTestDataProvider(Dataset):
         valid_event_data_list = [np.loadtxt(file) for file in valid_event_file_paths]
         valid_events = torch.from_numpy(np.vstack(valid_event_data_list))
 
-        valid_events_norm = misc.process_events(
+        valid_events_norm = event_proc.normalize_events(
             origin_events=valid_events,
             image_size=(self.H, self.W),
             start_end=(self.t_start,self.t_end)
