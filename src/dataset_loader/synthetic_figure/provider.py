@@ -38,7 +38,7 @@ class SyntheticFigureDataProvider(Dataset):
             intrinsic_mat=self.K,
             start_end=(self.t_start,self.t_end),
             normalize_time=True,
-            normalize_coords_mode="CAMERA_PLANE"
+            normalize_coords_mode="NORM_PLANE"
         )
 
         train_batch_data : Dict[str, Any] = {
@@ -65,7 +65,7 @@ class SyntheticFigureDataProvider(Dataset):
             intrinsic_mat=self.K,
             start_end=(self.t_start,self.t_end),
             normalize_time=True,
-            normalize_coords_mode="CAMERA_PLANE"
+            normalize_coords_mode="NORM_PLANE"
         )
 
         valid_batch_data : Dict[str, Any] = {

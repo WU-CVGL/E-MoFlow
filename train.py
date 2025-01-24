@@ -1,13 +1,11 @@
 import os
 import sys
+import torch 
 import logging
 import cv2 as cv2
-
-import torch 
 import torch.optim as optim
 
 from tqdm import tqdm
-
 from src.loss import focus
 from src.utils import misc
 from src.utils import event_proc

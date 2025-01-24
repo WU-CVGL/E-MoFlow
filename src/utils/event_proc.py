@@ -54,7 +54,7 @@ def normalize_events(
     intrinsic_mat: torch.Tensor,
     start_end: Tuple[float,  float],
     normalize_time: bool = True,
-    normalize_coords_mode: str = "CAMERA_PLANE"
+    normalize_coords_mode: str = "NORM_PLANE"
 ) -> torch.Tensor:
     """
     Load and process event data files, converting them into normalized tensor vectors.
@@ -94,7 +94,7 @@ def normalize_events(
     if normalize_coords_mode == "UV_SPACE":
         norm_x_coords = x_coords / (image_size[1] - 1)  # Width
         norm_y_coords = y_coords / (image_size[0] - 1)  # Height
-    elif normalize_coords_mode == "CAMERA_PLANE":
+    elif normalize_coords_mode == "NORM_PLANE":
         fx, fy = intrinsic_mat[0,0], intrinsic_mat[1,1]
         cx, cy = intrinsic_mat[0,2], intrinsic_mat[1,2]
         norm_x_coords = (x_coords - cx) / fx
