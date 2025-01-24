@@ -39,9 +39,9 @@ if __name__ == "__main__":
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
     
     # load data
-    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/K_matrix.txt")
-    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/camera_pose.txt")
-    TimeStamps_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/timestamp.txt")
+    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/K_matrix.txt")
+    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/camera_pose.txt")
+    TimeStamps_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/timestamp.txt")
     K_tensor = misc.load_camera_intrinsic(K_path)
     gt_camera_pose = misc.load_camera_pose(CamPose_path)
     timestamps = misc.load_time_stamps(TimeStamps_path)
@@ -59,20 +59,19 @@ if __name__ == "__main__":
         normalize_coords_mode="NORM_PLANE", 
         device=device
     )
-    sequence_length = 20
-    t = torch.linspace(0, 1, steps=sequence_length).view(1, -1)  # shape: [1, d]
+    sequence_length = 50
+    t = torch.linspace(0, 1, steps=sequence_length).view(1, -1).to(device)  # shape: [1, d]
     time_scale = 1 / timestamps[sequence_length - 1]
     # t_mid = ((t[0, 1:] + t[0, :-1]) / 2).unsqueeze(0) 
-    U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t, time_scale)
+    # U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t, time_scale)
 
-    
     pixel2cam = geometric.Pixel2Cam(image_size[0], image_size[1], device)
     normalized_pixel_grid = pixel2cam(K_tensor.to(device))
     normalized_pixel_grid = normalized_pixel_grid.squeeze(0)
     # pose_optimizer = geometric.PoseOptimizer(image_size, device)
 
     # valid using gt depth
-    depth_folder = '/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/depth'
+    depth_folder = '/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/depth'
     depth_paths = misc.get_sorted_txt_paths(depth_folder)
 
     for i in tqdm(range(t.shape[1])):
@@ -85,10 +84,12 @@ if __name__ == "__main__":
         v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
         optical_flow = geometric.compute_motion_field(normalized_pixel_grid, v_gt, w_gt, depth_gt)
         
+        U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t[...,i], time_scale)
+        
         # visualize color optical flow
         eval_color_flow, wheel = viz.visualize_optical_flow(
-            flow_x=U[i].cpu().numpy(),
-            flow_y=V[i].cpu().numpy(),
+            flow_x=U.cpu().numpy(),
+            flow_y=V.cpu().numpy(),
             visualize_color_wheel=True,
             file_prefix="evaluate_dense_optical_flow",
             save_flow=False,
@@ -96,8 +97,8 @@ if __name__ == "__main__":
         )
 
         eval_arrow_flow = viz.visualize_flow_arrows(
-            flow_x=(U[i] / 10).cpu().numpy(),
-            flow_y=(V[i] / 10).cpu().numpy(),  
+            flow_x=(U / 10).cpu().numpy(),
+            flow_y=(V / 10).cpu().numpy(),  
             file_prefix="evaluate_optical_flow_arrow",
             sampling_ratio=0.001, 
             bg_color=(255, 255, 255)    

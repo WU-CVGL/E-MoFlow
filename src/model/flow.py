@@ -36,21 +36,43 @@ class DenseOpticalFlowCalc:
         self.device = device
         self.normalize_coords_mode = normalize_coords_mode
 
+    # def extract_flow_from_inr(self, t, time_scale):
+    #     num_points = self.x.shape[0]
+    #     num_timesteps = t.shape[1]
+    #     x_batch = self.x.repeat(num_timesteps)
+    #     y_batch = self.y.repeat(num_timesteps)
+    #     t_batch = t.view(-1).repeat_interleave(num_points).to(self.device)
+    #     txy = torch.stack((t_batch, x_batch, y_batch), dim=1)
+        
+    #     with torch.no_grad():
+    #         flow = self.model(txy)  # [num_points*num_timesteps, 2]
+        
+    #     u = flow[:, 0].view(num_timesteps, num_points)
+    #     v = flow[:, 1].view(num_timesteps, num_points)
+    #     U_norm = u.view(num_timesteps, self.H, self.W)
+    #     V_norm = v.view(num_timesteps, self.H, self.W)
+        
+    #     if self.normalize_coords_mode == "UV_SPACE":
+    #         U, V = U_norm * (self.W - 1) * time_scale, V_norm * (self.H - 1) * time_scale
+    #     elif self.normalize_coords_mode == "NORM_PLANE":
+    #         fx, fy = self.K[0,0], self.K[1,1]
+    #         U, V = U_norm * fx * time_scale, V_norm * fy * time_scale
+    #     else:
+    #         U, V = U_norm * time_scale, V_norm * time_scale
+    #     return U, V, U_norm, V_norm
+    
     def extract_flow_from_inr(self, t, time_scale):
         num_points = self.x.shape[0]
-        num_timesteps = t.shape[1]
-        x_batch = self.x.repeat(num_timesteps)
-        y_batch = self.y.repeat(num_timesteps)
-        t_batch = t.view(-1).repeat_interleave(num_points).to(self.device)
-        txy = torch.stack((t_batch, x_batch, y_batch), dim=1)
+        t_batch = t * torch.ones(num_points, device=self.device).to(self.device)
+        txy = torch.stack((t_batch, self.x, self.y), dim=1)
         
         with torch.no_grad():
-            flow = self.model(txy)  # [num_points*num_timesteps, 2]
+            flow = self.model(txy)  # [num_points, 2]
         
-        u = flow[:, 0].view(num_timesteps, num_points)
-        v = flow[:, 1].view(num_timesteps, num_points)
-        U_norm = u.view(num_timesteps, self.H, self.W)
-        V_norm = v.view(num_timesteps, self.H, self.W)
+        u = flow[:, 0]
+        v = flow[:, 1]
+        U_norm = u.view(self.H, self.W)
+        V_norm = v.view(self.H, self.W)
         
         if self.normalize_coords_mode == "UV_SPACE":
             U, V = U_norm * (self.W - 1) * time_scale, V_norm * (self.H - 1) * time_scale
