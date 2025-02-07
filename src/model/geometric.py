@@ -156,6 +156,8 @@ class PoseOptimizer:
             
         optimizer = th.LevenbergMarquardt(
             objective,
+            linear_solver_cls=th.CholeskyDenseSolver,
+            linearization_cls=th.DenseLinearization,
             max_iterations=num_iterations,
             step_size=1,
         )
@@ -184,14 +186,16 @@ class PoseOptimizer:
             updated_inputs, info = theseus_optim.forward(
                 theseus_inputs,
                 optimizer_kwargs={
-                    # "damping": 0.1,
+                    "damping": 0.1,
                     "track_best_solution": True,
                     "track_state_history": True,
                     "track_err_history": True,
                     "verbose": True,
+                    "backward_mode": "implicit",
                 },
             )
-        
+        # final_linearization = optimizer.linear_solver.linearization
+        # hessian = final_linearization.AtA  # [6,6]
         if only_rotation:
             w_opt = info.best_solution["angular_velocity"]
             w_history = info.state_history["angular_velocity"].view(-1, 3)
