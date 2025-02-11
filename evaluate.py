@@ -12,10 +12,10 @@ from src.utils import (
 )
 
 from src.model import geometric
-from src.model.inr import EventFlowINR
+from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.utils.visualizer import Visualizer
-from src.model.flow import DenseOpticalFlowCalc
+from src.model.eventflow import DenseOpticalFlowCalc
 
 if __name__ == "__main__":
     args = load_config.parse_args()
@@ -137,7 +137,7 @@ if __name__ == "__main__":
         current_coords = normalized_pixel_grid.view(-1,3)
         current_sparse_flow, indices = flow_calculator.sparsify_flow(
             optical_flow,
-            sparse_ratio=0.01,
+            sparse_ratio=0.05,
             threshold=0.0001
         )
         current_sparse_coords = current_coords[indices, :]

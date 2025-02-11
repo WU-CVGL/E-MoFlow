@@ -8,9 +8,10 @@ import torch.optim as optim
 from tqdm import tqdm
 from src.loss import focus
 from src.utils import misc
+from src.utils import pose
 from src.utils import event_proc
 from src.utils import load_config
-from src.model.inr import EventFlowINR
+from model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp
 from src.utils.timer import TimeAnalyzer
@@ -54,6 +55,10 @@ if __name__ == "__main__":
     dataset = dataset_manager.get_dataset(dataset_name, data_config)
     loader, provider = dataset_manager.create_loader(dataset, dataloader_config)
     camera_K = provider.get_camera_K().to(device)
+    gt_camera_pose = provider.get_gt_camera_pose().to(device)
+    [start_index, end_index] = provider.sequence_indices
+    end_time, start_time = gt_camera_pose[...,0][end_index], gt_camera_pose[...,0][start_index] 
+    time_scale = torch.Tensor(1 / (end_time - start_time)).to(device)
     
     # event2img converter
     image_size = (data_config["hight"], data_config["weight"])
@@ -98,10 +103,10 @@ if __name__ == "__main__":
             origin_iwe = converter.create_iwes(events[:, [2,1,0,3]])
 
             # get t_ref
-            ref = warpper.get_reference_time(norm_txy, warp_config["tref_setting"])
+            t_ref = warpper.get_reference_time(norm_txy, warp_config["tref_setting"])
 
             # odewarp 
-            warped_norm_txy = warpper.warp_events(norm_txy, ref, method=warp_config["solver"])
+            warped_norm_txy = warpper.warp_events(norm_txy, t_ref, method=warp_config["solver"])
 
             # create image warped event    
             num_iwe = warped_norm_txy.shape[0]
@@ -122,7 +127,7 @@ if __name__ == "__main__":
                 blur=True
             ) # [n,h,w] n can be one or multi
 
-            # loss
+            # CMax loss
             if num_iwe == 1:
                 # var_loss = torch.Tensor([0]).to(device)
                 var_loss = focus.calculate_focus_loss(iwes, loss_type='variance')
@@ -133,9 +138,13 @@ if __name__ == "__main__":
                 grad_loss_t_min = focus.calculate_focus_loss(iwes[0].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
                 grad_loss_t_mid = focus.calculate_focus_loss(iwes[len(iwes)//2].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
                 grad_loss_t_max = focus.calculate_focus_loss(iwes[-1].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                gard_loss_origin = focus.calculate_focus_loss(origin_iwe, loss_type='gradient_magnitude', norm='l1')
+                grad_loss_origin = focus.calculate_focus_loss(origin_iwe, loss_type='gradient_magnitude', norm='l1')
 
-                grad_loss = (grad_loss_t_min + grad_loss_t_max + 2 * grad_loss_t_mid) / 4 * gard_loss_origin
+                grad_loss = (grad_loss_t_min + grad_loss_t_max + 2 * grad_loss_t_mid) / 4 * grad_loss_origin
+            
+            v_gt, w_gt = pose.pose_to_velocity(t_ref / time_scale, gt_camera_pose)
+            
+            
             total_loss = - (grad_loss + var_loss)
             wandb_logger.write("var_loss", var_loss.item())
             wandb_logger.write("grad_loss", grad_loss.item())
@@ -145,6 +154,7 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
+            
         # print loss in console
         tqdm.write(
             f"[LOG] Epoch {i} Total Loss: {total_loss.item()}, Var Loss: {var_loss.item()}, Grad Loss: {grad_loss.item()},"

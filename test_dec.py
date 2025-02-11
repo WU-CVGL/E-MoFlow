@@ -9,10 +9,10 @@ from src.utils import pose
 from src.model import geometric
 from src.utils import vector_math
 from src.utils import load_config
-from src.model.inr import EventFlowINR
+from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.utils.visualizer import Visualizer
-from src.model.flow import DenseOpticalFlowCalc
+from src.model.eventflow import DenseOpticalFlowCalc
 
 if __name__ == "__main__":
     args = load_config.parse_args()
