@@ -33,7 +33,7 @@ class SyntheticFigureDataset(DatasetBase):
         self.event_txt_dir = self.data_path / "events"
         self.flow_txt_dir = self.data_path / "forward_flow"
         self.intrinsic_path = self.data_path / "K_matrix.txt"
-        self.pose_path = self.data_path / "camera_poses.txt"
+        self.pose_path = self.data_path / "camera_pose.txt"
 
         self.events_txt_files_path = self._load_events_txt_files_path(self.event_txt_dir)
         self.train_event_files_path = misc.get_filenames(self.events_txt_files_path, sequence_indices)
@@ -42,7 +42,20 @@ class SyntheticFigureDataset(DatasetBase):
         logger.info(f"Event stream duration: {self.duration} sec")
 
         self.K = self._load_camera_intrinsic(self.intrinsic_path)
+        self.gt_pose = self._load_gt_camera_pose(self.pose_path)
 
+    def _get_event_duration(
+        self, 
+        files: List[str]
+    ) -> float:
+        if len(files) == 1:
+            frame_events = np.loadtxt(files[0])
+            start_time, end_time = frame_events[0][0], frame_events[-1][0]
+        else:
+            first_frame_events, last_frame_events = np.loadtxt(files[0]), np.loadtxt(files[-1])
+            start_time, end_time = first_frame_events[0][0], last_frame_events[-1][0]
+        return start_time, end_time
+    
     def _load_events_txt_files_path(
         self, 
         dir: str, 
@@ -59,17 +72,12 @@ class SyntheticFigureDataset(DatasetBase):
         K_tensor = misc.load_camera_intrinsic(file_path)
         return K_tensor
 
-    def _get_event_duration(
-        self, 
-        files: List[str]
-    ) -> float:
-        if len(files) == 1:
-            frame_events = np.loadtxt(files[0])
-            start_time, end_time = frame_events[0][0], frame_events[-1][0]
-        else:
-            first_frame_events, last_frame_events = np.loadtxt(files[0]), np.loadtxt(files[-1])
-            start_time, end_time = first_frame_events[0][0], last_frame_events[-1][0]
-        return start_time, end_time
+    def _load_gt_camera_pose(
+        self,
+        file_path: str,
+    )-> List[str]:
+        pose_tensor = misc.load_camera_pose(file_path)
+        return pose_tensor
     
     @property
     def data_num(self) -> int:

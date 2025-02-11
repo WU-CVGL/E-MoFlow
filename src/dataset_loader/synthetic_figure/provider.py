@@ -22,10 +22,15 @@ class SyntheticFigureDataProvider(Dataset):
         self.t_end = dataset.event_end_time
         self.duration = dataset.duration
         self.batch_range = dataset.batch_range
+        self.sequence_indices = dataset.sequence_indices
         self.K = dataset.K
+        self.gt_camera_pose = dataset.gt_pose
 
     def get_camera_K(self) -> torch.Tensor:
         return self.K
+    
+    def get_gt_camera_pose(self) -> torch.Tensor:
+        return self.gt_camera_pose
 
     def get_train_data(self, idx) -> Dict:
         event_file_paths = self.dataset.train_event_files_path
@@ -40,6 +45,7 @@ class SyntheticFigureDataProvider(Dataset):
             normalize_time=True,
             normalize_coords_mode="NORM_PLANE"
         )
+
 
         train_batch_data : Dict[str, Any] = {
             "events": events,
