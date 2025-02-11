@@ -43,7 +43,7 @@ def quaternion_to_angular_velocity(q1: torch.Tensor, q2: torch.Tensor, dt: float
         w1*x2 - x1*w2 - y1*z2 + z1*y2,
         w1*y2 + x1*z2 - y1*w2 - z1*x2,
         w1*z2 - x1*y2 + y1*x2 - z1*w2
-    ])
+    ]).to(q1.device)
     
     return omega
 
@@ -59,7 +59,7 @@ def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
         [1 - 2*y*y - 2*z*z, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
         [2*x*y + 2*w*z, 1 - 2*x*x - 2*z*z, 2*y*z - 2*w*x],
         [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x*x - 2*y*y]
-    ])
+    ]).to(q.device)
     
     if torch.norm(torch.mm(R, R.t()) - torch.eye(3, device=q.device, dtype=q.dtype)) > 1e-2:
         print("Warning: Rotation matrix orthogonality check failed")
@@ -96,7 +96,7 @@ def angular_velocity_to_euler_rates(omega: torch.Tensor, q: torch.Tensor) -> tor
         [1, torch.sin(roll)*torch.tan(pitch), torch.cos(roll)*torch.tan(pitch)],
         [0, torch.cos(roll), -torch.sin(roll)],
         [0, torch.sin(roll)/torch.cos(pitch), torch.cos(roll)/torch.cos(pitch)]
-    ])
+    ]).to(q.device)
     
     euler_rates = transform @ omega
     
@@ -146,7 +146,7 @@ def pose_to_velocity(timestamp: float, pose: torch.Tensor, dataset_name: str=Non
     #================= only for Blender! =================#
     R_cam = torch.Tensor([[0, -1, 0],
                     [0, 0, -1],
-                    [1, 0, 0]]) @ R
+                    [1, 0, 0]]).to(q1.device) @ R
 
     # Transform velocities to body frame
     v_body = R_cam @ v_mocap
