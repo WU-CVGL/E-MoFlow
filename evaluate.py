@@ -70,7 +70,7 @@ if __name__ == "__main__":
     # U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t, time_scale)
 
     pixel2cam = geometric.Pixel2Cam(image_size[0], image_size[1], device)
-    normalized_pixel_grid = pixel2cam(K_tensor.to(device))
+    normalized_pixel_grid = pixel2cam.generate_normalized_coordinate(K_tensor.to(device))
     normalized_pixel_grid = normalized_pixel_grid.squeeze(0)
     pose_optimizer = geometric.PoseOptimizer(image_size, device)
 
@@ -134,29 +134,29 @@ if __name__ == "__main__":
         wandb_logger.update_buffer()
         
         
-        current_coords = normalized_pixel_grid.view(-1,3)
-        current_sparse_flow, indices = flow_calculator.sparsify_flow(
-            optical_flow,
-            sparse_ratio=0.05,
-            threshold=0.0001
-        )
-        current_sparse_coords = current_coords[indices, :]
+        # current_coords = normalized_pixel_grid.view(-1,3)
+        # current_sparse_flow, indices = flow_calculator.sparsify_flow(
+        #     optical_flow,
+        #     sparse_ratio=0.05,
+        #     threshold=0.0001
+        # )
+        # current_sparse_coords = current_coords[indices, :]
+
+        # noise_level = 0.0
+        # v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
+        # w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
+        # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+        # init_velc = [v_gt_noisy, w_gt_noisy]
         
-        noise_level = 0.0
-        v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
-        w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
-        v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-        init_velc = [v_gt_noisy, w_gt_noisy]
-        
-        v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=False, init_velc=init_velc)
-        # _, w_est, _, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=True, init_velc=init_velc)   
-        v_est = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
-        print(f"======================================================= Pose Optimization =======================================================")
-        print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
-        print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
-        print(f"estimated_linear_velocity:{v_est}, estimated_angular_velocity:{w_est}")
-        print(f"linear_velocity_error:{vector_math.compute_vector_angle_in_degrees(v_est.to(device), v_gt)}, angular_velocity_error:{vector_math.compute_vector_angle_in_degrees(w_est.to(device), w_gt)}")
-        print(f"dec_last_error:{err_his[-1]}")
+        # v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=False, init_velc=init_velc)
+        # # _, w_est, _, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=True, init_velc=init_velc)   
+        # v_est = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
+        # print(f"======================================================= Pose Optimization =======================================================")
+        # print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
+        # print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
+        # print(f"estimated_linear_velocity:{v_est}, estimated_angular_velocity:{w_est}")
+        # print(f"linear_velocity_error:{vector_math.compute_vector_angle_in_degrees(v_est.to(device), v_gt)}, angular_velocity_error:{vector_math.compute_vector_angle_in_degrees(w_est.to(device), w_gt)}")
+        # print(f"dec_last_error:{err_his[-1]}")
         
         # print(f"======================================================= Pose Optimization =======================================================")
         # print(f"groundtruth_angular_velocity:{w_gt}")
