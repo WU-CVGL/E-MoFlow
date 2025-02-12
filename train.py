@@ -34,6 +34,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+torch.set_float32_matmul_precision('high')
+
 if __name__ == "__main__":
     # load configs
     args = load_config.parse_args()
@@ -196,7 +198,8 @@ if __name__ == "__main__":
                 init_velc=init_velc,
                 num_iterations=100
             )
-
+            # print(f"linear velocity history:\n {v_his[::10,...]}")
+            # print(f"angular_velocity velocity history:\n {w_his[::10,...]}")
             # Motion loss
             motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt)
             # motion_loss = torch.Tensor([0]).to(device)
@@ -219,7 +222,7 @@ if __name__ == "__main__":
             
         # print loss in console
         tqdm.write(
-            f"[LOG] Epoch {i} Total Loss: {total_loss.item()}, Var Loss: {var_loss.item()}, Grad Loss: {grad_loss.item()},"
+            f"[LOG] Epoch {i} Total Loss: {total_loss.item()}, Var Loss: {scaled_var_loss.item()}, Grad Loss: {scaled_grad_loss.item()}, Motion Loss: {scaled_motion_loss.item()}"
         )
         # update learning rate
         for param_group in optimizer.param_groups:

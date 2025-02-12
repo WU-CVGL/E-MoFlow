@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class VelocityLoss(nn.Module):
-    def __init__(self, alpha=0.5, beta=0.5, gamma=0.6):
+    def __init__(self, alpha=0.2, beta=0.2, gamma=0.8):
 
         """
         Args:

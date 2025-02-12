@@ -2,7 +2,7 @@ import torch
 import kornia
 import theseus as th
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 from src.utils.vector_math import vector_to_skew_matrix
 
 class Pixel2Cam:
@@ -222,7 +222,7 @@ class PoseOptimizer:
             objective.add(cost_fn)
         
         # create second-order optimizer
-        optimizer = th.LevenbergMarquardt(
+        theseus_optimizer = th.LevenbergMarquardt(
             objective,
             linear_solver_cls=th.CholeskyDenseSolver,
             linearization_cls=th.DenseLinearization,
@@ -231,34 +231,59 @@ class PoseOptimizer:
         )
         
         # create theseus layer
-        theseus_optim = th.TheseusLayer(optimizer).to(self.device)
+        theseus_layer = th.TheseusLayer(theseus_optimizer).to(self.device)
         
         # forward optimize
-        updated_inputs, info = theseus_optim.forward(
+        updated_inputs, info = theseus_layer.forward(
             theseus_inputs,
             optimizer_kwargs={
                 "damping": 0.1,
-                "track_best_solution": True,
+                # "track_best_solution": False,
                 "track_state_history": True,
                 "track_err_history": True,
-                "verbose": True,
+                "verbose": False,
                 "backward_mode": "implicit",
             },
         )
+        
+        # final_linearization = optimizer.linear_solver.linearization
+        # hessian = final_linearization.AtA  # [6,6]
+        
+        optimizer_info: th.NonlinearOptimizerInfo = cast(
+            th.NonlinearOptimizerInfo, info
+        )
+        err_hist = optimizer_info.err_history
+        velocity_hist = optimizer_info.state_history
+
+        v_opt_tensor = theseus_layer.objective.get_optim_var("linear_velocity").tensor
+        w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor
+        
         # final_linearization = optimizer.linear_solver.linearization
         # hessian = final_linearization.AtA  # [6,6]
         if only_rotation:
-            w_opt = info.best_solution["angular_velocity"]
-            w_history = info.state_history["angular_velocity"].view(-1, 3)
-            err = info.err_history.view(-1,1)
-            return None, w_opt, None, w_history, err
+            w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor.to(self.device)
+            w_history = velocity_hist["angular_velocity"].view(-1, 3)
+            err = err_hist.view(-1,1)
+            return None, w_opt_tensor, None, w_history, err
         else:
-            v_opt = info.best_solution["linear_velocity"] 
-            w_opt = info.best_solution["angular_velocity"]
-            v_history = info.state_history["linear_velocity"].view(-1, 3)
-            w_history = info.state_history["angular_velocity"].view(-1, 3)
-            err = info.err_history.view(-1,1)
-            return v_opt, w_opt, v_history, w_history, err
+            v_opt_tensor = theseus_layer.objective.get_optim_var("linear_velocity").tensor
+            w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor
+            v_history = velocity_hist["linear_velocity"].view(-1, 3)
+            w_history = velocity_hist["angular_velocity"].view(-1, 3)
+            err = err_hist.view(-1,1)
+            return v_opt_tensor, w_opt_tensor, v_history, w_history, err
+        # if only_rotation:
+        #     w_opt = info.best_solution["angular_velocity"]
+        #     w_history = info.state_history["angular_velocity"].view(-1, 3)
+        #     err = info.err_history.view(-1,1)
+        #     return None, w_opt, None, w_history, err
+        # else:
+        #     v_opt = info.best_solution["linear_velocity"] 
+        #     w_opt = info.best_solution["angular_velocity"]
+        #     v_history = info.state_history["linear_velocity"].view(-1, 3)
+        #     w_history = info.state_history["angular_velocity"].view(-1, 3)
+        #     err = info.err_history.view(-1,1)
+        #     return v_opt, w_opt, v_history, w_history, err
         
 def compute_motion_field(coords, v_gt, w_gt, depth_gt):
     """

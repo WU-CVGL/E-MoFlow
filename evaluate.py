@@ -17,6 +17,8 @@ from src.utils.wandb import WandbLogger
 from src.utils.visualizer import Visualizer
 from src.model.eventflow import DenseOpticalFlowCalc
 
+torch.set_float32_matmul_precision('high')
+
 if __name__ == "__main__":
     args = load_config.parse_args()
     config = load_config.load_yaml_config(args.config)
