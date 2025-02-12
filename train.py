@@ -4,18 +4,22 @@ import torch
 import logging
 import cv2 as cv2
 import torch.optim as optim
+import torch.nn.functional as F
 
 from tqdm import tqdm
-from src.loss import focus
+from src.loss.focus import FocusLoss
+from src.loss.motion import VelocityLoss
 from src.utils import misc
 from src.utils import pose
 from src.utils import event_proc
 from src.utils import load_config
-from model.eventflow import EventFlowINR
+from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp
+from src.model import geometric
 from src.utils.timer import TimeAnalyzer
 from src.dataset_loader import dataset_manager
+from src.model.eventflow import DenseOpticalFlowCalc
 from src.utils.event_image_converter import EventImageConverter
 
 # log
@@ -63,14 +67,26 @@ if __name__ == "__main__":
     # event2img converter
     image_size = (data_config["hight"], data_config["weight"])
     converter = EventImageConverter(image_size)
-
+    
+    # create the grid of camera normalized plane
+    pixel2cam = geometric.Pixel2Cam(image_size[0], image_size[1], device)
+    norm_coords = pixel2cam.generate_normalized_coordinate(camera_K.to(device))
+    
     # create model
-    flow_field = EventFlowINR(model_config).to(device)
+    flow_field: EventFlowINR = EventFlowINR(model_config).to(device)
     warpper = NeuralODEWarp(flow_field, device, **warp_config)
-
-    # create optimizer
+    
+    # create NN optimizer
     optimizer = optim.Adam(flow_field.parameters(), lr=optimizer_config["initial_lrate"])
+    
+    # create theseus optimizer
+    pose_optimizer = geometric.PoseOptimizer(image_size, device)
 
+    # instantiate criterion
+    grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
+    var_criterion = FocusLoss(loss_type="variance", norm="l1")
+    motion_criterion = VelocityLoss(alpha=0.4, beta=0.4, gamma=0.8)
+    
     # prepare data to valid
     valid_data = provider.get_valid_data(config["valid"]["file_idx"])
     valid_events = valid_data["events"]
@@ -95,6 +111,8 @@ if __name__ == "__main__":
         time_analyzer.start_epoch()
 
         for idx, sample in enumerate(tqdm(loader, desc=f"Tranning {i} epoch", leave=True)):
+            optimizer.zero_grad()
+            
             # get batch data
             events = sample["events"].squeeze(0)
             events_norm = sample["events_norm"].squeeze(0)
@@ -105,7 +123,7 @@ if __name__ == "__main__":
             # get t_ref
             t_ref = warpper.get_reference_time(norm_txy, warp_config["tref_setting"])
 
-            # odewarp 
+            # warp by neural ode 
             warped_norm_txy = warpper.warp_events(norm_txy, t_ref, method=warp_config["solver"])
 
             # create image warped event    
@@ -130,28 +148,72 @@ if __name__ == "__main__":
             # CMax loss
             if num_iwe == 1:
                 # var_loss = torch.Tensor([0]).to(device)
-                var_loss = focus.calculate_focus_loss(iwes, loss_type='variance')
-                grad_loss = focus.calculate_focus_loss(iwes, loss_type='gradient_magnitude', norm='l1')
+                var_loss = var_criterion(iwes)
+                grad_loss = grad_criterion(iwes)
+                # var_loss = focus.calculate_focus_loss(iwes, loss_type='variance')
+                # grad_loss = focus.calculate_focus_loss(iwes, loss_type='gradient_magnitude', norm='l1')
             elif num_iwe > 1:
                 var_loss = torch.Tensor([0]).to(device)
                 # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
-                grad_loss_t_min = focus.calculate_focus_loss(iwes[0].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                grad_loss_t_mid = focus.calculate_focus_loss(iwes[len(iwes)//2].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                grad_loss_t_max = focus.calculate_focus_loss(iwes[-1].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                grad_loss_origin = focus.calculate_focus_loss(origin_iwe, loss_type='gradient_magnitude', norm='l1')
+                # grad_loss_t_min = focus.calculate_focus_loss(iwes[0].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
+                # grad_loss_t_mid = focus.calculate_focus_loss(iwes[len(iwes)//2].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
+                # grad_loss_t_max = focus.calculate_focus_loss(iwes[-1].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
+                # grad_loss_origin = focus.calculate_focus_loss(origin_iwe, loss_type='gradient_magnitude', norm='l1')
 
+                grad_loss_t_min = grad_criterion(iwes[0].unsqueeze(0))
+                grad_loss_t_mid = grad_criterion(iwes[len(iwes)//2].unsqueeze(0))
+                grad_loss_t_max = grad_criterion(iwes[-1].unsqueeze(0))
+                grad_loss_origin = grad_criterion(origin_iwe)
+                
                 grad_loss = (grad_loss_t_min + grad_loss_t_max + 2 * grad_loss_t_mid) / 4 * grad_loss_origin
             
+            # sample coordinates
+            sample_coords = pixel2cam.sample_sparse_points(sparsity_level=(48*64), norm_coords=norm_coords)
+            t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
+            sample_norm_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
+            
+            # get optical flow
+            sample_flow = flow_field.forward(sample_norm_txy)
+            sample_flow = F.pad(sample_flow, (0, 1), mode='constant', value=0)
+            sample_flow = sample_flow * time_scale # scale
+            
+            # get gt velocity
             v_gt, w_gt = pose.pose_to_velocity(t_ref / time_scale, gt_camera_pose)
+            v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
+            v_gt = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
+            # intial value for differential epipolar constrain
+            noise_level = 0.0
+            v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
+            w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
+            # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+            init_velc = [v_gt_noisy, w_gt_noisy]
             
-            total_loss = - (grad_loss + var_loss)
-            wandb_logger.write("var_loss", var_loss.item())
-            wandb_logger.write("grad_loss", grad_loss.item())
+            # theseus optimize 
+            v_opt, w_opt, v_his, w_his, err_his = pose_optimizer.optimize(
+                sample_coords, sample_flow, 
+                only_rotation=False, 
+                init_velc=init_velc,
+                num_iterations=100
+            )
+
+            # Motion loss
+            motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt)
+            # motion_loss = torch.Tensor([0]).to(device)
+            
+            # Total loss
+            alpha, beta, gamma = 1, 1, 1
+            scaled_grad_loss =  alpha * grad_loss / 8.0
+            scaled_var_loss = beta * var_loss / 31.0
+            scaled_motion_loss = gamma * motion_loss
+            total_loss = - scaled_grad_loss - scaled_var_loss + scaled_motion_loss
+            
+            wandb_logger.write("var_loss", scaled_var_loss.item())
+            wandb_logger.write("grad_loss", scaled_grad_loss.item())
+            wandb_logger.write("motion_loss", scaled_motion_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
 
-            # optimize
-            optimizer.zero_grad()
+            # NN optimize
             total_loss.backward()
             optimizer.step()
             

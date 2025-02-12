@@ -7,6 +7,9 @@ from src.utils.vector_math import vector_to_skew_matrix
 
 class Pixel2Cam:
     def __init__(self, H: int, W: int, device: torch.device):
+        self.H = H
+        self.W = W
+        self.device = device
         self.grid = kornia.utils.create_meshgrid(
             H, W, normalized_coordinates=False).to(device)
         self.grid = self.grid.squeeze(0)
@@ -14,7 +17,11 @@ class Pixel2Cam:
         self.pixels_homogeneous = torch.cat(
             [self.grid, self.ones], dim=-1)  # [H,W,3]
         
-    def __call__(self, K: torch.Tensor, depth: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def generate_normalized_coordinate(
+        self, 
+        K: torch.Tensor, 
+        depth: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         if K.dim() == 2:
             K = K.unsqueeze(0)
         B = K.shape[0]
@@ -26,10 +33,47 @@ class Pixel2Cam:
         K_4x4_inv = torch.inverse(K_4x4)
         
         if depth is None:
-            depth = torch.ones(B, 1, *self.grid.shape[:2], device=K.device)
+            depth = torch.ones(B, 1, self.H, self.W, device=K.device)
             
         return kornia.geometry.camera.pinhole.pixel2cam(
             depth, K_4x4_inv, pixels_batch)[..., :3]
+
+    def sample_sparse_points(
+        self, 
+        sparsity_level: int,
+        norm_coords: torch.Tensor, 
+    ) -> torch.Tensor:
+        B, H, W, _ = norm_coords.shape
+        h_split, w_split = self._get_splits(sparsity_level)
+        
+        if H % h_split != 0 or W % w_split != 0:
+            raise ValueError(
+                f"Cannot divide {H}x{W} image into {h_split}x{w_split} blocks. "
+                f"Please ensure height {H} is divisible by {h_split} and width {W} is divisible by {w_split}."
+            )
+
+        block_h = H // h_split
+        block_w = W // w_split
+
+        base_rows = torch.arange(h_split, device=norm_coords.device).view(1, h_split, 1) * block_h
+        base_cols = torch.arange(w_split, device=norm_coords.device).view(1, 1, w_split) * block_w
+        row_offsets = torch.randint(0, block_h, (B, h_split, w_split), device=norm_coords.device)
+        col_offsets = torch.randint(0, block_w, (B, h_split, w_split), device=norm_coords.device)
+        row_indices = base_rows + row_offsets
+        col_indices = base_cols + col_offsets
+
+        b_idx = torch.arange(B, device=norm_coords.device)[:, None, None]
+
+        sampled_points = norm_coords[b_idx, row_indices, col_indices]
+
+        return sampled_points.reshape(B, -1, 3)
+
+    def _get_splits(self, n: int) -> Tuple[int, int]:
+        max_factor = int(n**0.5)
+        for i in range(max_factor, 0, -1):
+            if n % i == 0:
+                return i, n // i
+        return 1, n
 
 class PoseOptimizer:
     def __init__(self, image_size, device="cuda"):
@@ -144,24 +188,12 @@ class PoseOptimizer:
         assert optical_flow.shape[-1] == 3, "[ERROR] Optical flow should be in homogeneous form [u,v,0]"
         assert normalized_coords.shape[:-1] == optical_flow.shape[:-1], "[ERROR] Batch dimensions should match"
         
-        normalized_coords = normalized_coords.unsqueeze(0)
-        optical_flow = optical_flow.unsqueeze(0)
-        
-        objective = th.Objective()
-        cost_functions = self.create_cost_function(
-            normalized_coords, optical_flow, only_rotation
-        )
-        for cost_fn in cost_functions:
-            objective.add(cost_fn)
-            
-        optimizer = th.LevenbergMarquardt(
-            objective,
-            linear_solver_cls=th.CholeskyDenseSolver,
-            linearization_cls=th.DenseLinearization,
-            max_iterations=num_iterations,
-            step_size=1,
-        )
-        
+        if normalized_coords.dim() == 2:
+            normalized_coords = normalized_coords.unsqueeze(0)
+        if optical_flow.dim() == 2:
+            optical_flow = optical_flow.unsqueeze(0)
+
+        # data
         if init_velc is not None:
             if only_rotation:
                 w_init = init_velc[1] if len(init_velc) > 1 else init_velc[0]
@@ -181,19 +213,38 @@ class PoseOptimizer:
             theseus_inputs["linear_velocity"] = v_init
         theseus_inputs["angular_velocity"] = w_init
         
+        # create cost function
+        objective = th.Objective()
+        cost_functions = self.create_cost_function(
+            normalized_coords, optical_flow, only_rotation
+        )
+        for cost_fn in cost_functions:
+            objective.add(cost_fn)
+        
+        # create second-order optimizer
+        optimizer = th.LevenbergMarquardt(
+            objective,
+            linear_solver_cls=th.CholeskyDenseSolver,
+            linearization_cls=th.DenseLinearization,
+            max_iterations=num_iterations,
+            step_size=1,
+        )
+        
+        # create theseus layer
         theseus_optim = th.TheseusLayer(optimizer).to(self.device)
-        with torch.no_grad():
-            updated_inputs, info = theseus_optim.forward(
-                theseus_inputs,
-                optimizer_kwargs={
-                    "damping": 0.1,
-                    "track_best_solution": True,
-                    "track_state_history": True,
-                    "track_err_history": True,
-                    "verbose": True,
-                    "backward_mode": "implicit",
-                },
-            )
+        
+        # forward optimize
+        updated_inputs, info = theseus_optim.forward(
+            theseus_inputs,
+            optimizer_kwargs={
+                "damping": 0.1,
+                "track_best_solution": True,
+                "track_state_history": True,
+                "track_err_history": True,
+                "verbose": True,
+                "backward_mode": "implicit",
+            },
+        )
         # final_linearization = optimizer.linear_solver.linearization
         # hessian = final_linearization.AtA  # [6,6]
         if only_rotation:
