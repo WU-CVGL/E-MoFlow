@@ -2,7 +2,33 @@ import os
 import torch
 import random
 import numpy as np
+import imageio.v2 as imageio
+
+from pathlib import Path
 from typing import List, Union
+
+def load_optical_flow(flow_path):
+    """Load optical flow map and return the horizontal and vertical component tensors"""
+    flow_16bit = imageio.imread(flow_path, format='PNG-FI').astype(np.float32)
+    
+    u_component = (flow_16bit[..., 0] - 2**15) / 128.0  # x
+    v_component = (flow_16bit[..., 1] - 2**15) / 128.0  # y
+    valid = flow_16bit[..., 2].astype(bool)
+    
+    U = torch.from_numpy(u_component)
+    V = torch.from_numpy(v_component)
+    mask = torch.from_numpy(valid)
+    
+    return U, V, mask
+
+def save_flow(file_path: Path, flow: np.ndarray):
+    """Save the optical flow as a 16-bit PNG."""
+    height, width = flow.shape[0], flow.shape[1]
+    flow_16bit = np.zeros((height, width, 3), dtype=np.uint16)
+    flow_16bit[..., 0] = (flow[..., 0] * 128 + 2**15).astype(np.uint16)  # y-component
+    flow_16bit[..., 1] = (flow[..., 1] * 128 + 2**15).astype(np.uint16)  # x-component
+    flow_16bit[..., 2] = 1
+    imageio.imwrite(str(file_path), flow_16bit, format='PNG-FI')
 
 def fix_random_seed(seed_idx=666) -> None:
     random.seed(seed_idx)
