@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import imageio.v2 as imageio
 
 from tqdm import tqdm
 from pathlib import Path
@@ -8,7 +9,8 @@ from src.utils import (
     misc, 
     pose, 
     vector_math,
-    load_config
+    load_config,
+    metric
 )
 
 from src.model import geometric
@@ -88,7 +90,8 @@ if __name__ == "__main__":
         else:
             v_gt, w_gt = pose.pose_to_velocity(timestamps[i], gt_camera_pose)
         v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
-        optical_flow = geometric.compute_motion_field(normalized_pixel_grid, v_gt, w_gt, depth_gt)
+        
+        gt_optical_flow_norm, gt_optical_flow = geometric.compute_motion_field(K_tensor, normalized_pixel_grid, v_gt, w_gt, depth_gt)
         
         U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t[...,i], time_scale)
         
@@ -99,7 +102,7 @@ if __name__ == "__main__":
             visualize_color_wheel=True,
             file_prefix="evaluate_dense_optical_flow",
             save_flow=False,
-            ord=1.0,
+            ord=0.5,
         )
 
         eval_arrow_flow = viz.visualize_flow_arrows(
@@ -111,23 +114,40 @@ if __name__ == "__main__":
         )
         
         gt_color_flow, wheel = viz.visualize_optical_flow(
-            flow_x=(optical_flow[...,0]*908.72409).cpu().numpy(),
-            flow_y=(optical_flow[...,1]*908.72409).cpu().numpy(),
+            flow_x=(gt_optical_flow[...,0]).cpu().numpy(),
+            flow_y=(gt_optical_flow[...,1]).cpu().numpy(),
             visualize_color_wheel=True,
             file_prefix="gt_dense_optical_flow",
             save_flow=False,
-            ord=1.0,
+            ord=0.5,
         )
         
         gt_arrow_flow = viz.visualize_flow_arrows(
-            flow_x=(optical_flow[...,0]*908.72409/10).cpu().numpy(),
-            flow_y=(optical_flow[...,1]*908.72409/10).cpu().numpy(),  
+            flow_x=(gt_optical_flow[...,0]/10).cpu().numpy(),
+            flow_y=(gt_optical_flow[...,1]/10).cpu().numpy(),  
             file_prefix="gt_optical_flow_arrow",
             sampling_ratio=0.001, 
             bg_color=(255, 255, 255)    
         )
 
+        # metric
+        gt_optical_flow = gt_optical_flow[..., :2].permute(2, 0, 1).unsqueeze(0)
+        pred_optical_flow = torch.stack([U, V], dim=2).permute(2, 0, 1).unsqueeze(0)
+        error = metric.calculate_flow_error(
+            flow_gt=gt_optical_flow, 
+            flow_pred=pred_optical_flow,
+            event_mask=None,
+            time_scale=None
+        )
+        
+        # misc.save_flow("./outputs/flowmap/boxes_gt.png", gt_optical_flow.cpu().numpy())
+        
         # upload wandb
+        wandb_logger.write("EPE", error["EPE"].item())
+        wandb_logger.write("AE", error["AE"].item())
+        wandb_logger.write("1PE", error["1PE"].item())
+        wandb_logger.write("2PE", error["2PE"].item())
+        wandb_logger.write("3PE", error["3PE"].item())
         wandb_logger.write_img("evaluate_dense_optical_flow", eval_color_flow)
         wandb_logger.write_img("evaluate_optical_flow_arrow", eval_arrow_flow)
         wandb_logger.write_img("gt_dense_optical_flow", gt_color_flow)
@@ -138,7 +158,7 @@ if __name__ == "__main__":
         
         # current_coords = normalized_pixel_grid.view(-1,3)
         # current_sparse_flow, indices = flow_calculator.sparsify_flow(
-        #     optical_flow,
+        #     gt_optical_flow,
         #     sparse_ratio=0.05,
         #     threshold=0.0001
         # )
