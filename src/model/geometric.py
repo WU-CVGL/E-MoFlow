@@ -285,18 +285,20 @@ class PoseOptimizer:
         #     err = info.err_history.view(-1,1)
         #     return v_opt, w_opt, v_history, w_history, err
         
-def compute_motion_field(coords, v_gt, w_gt, depth_gt):
+def compute_motion_field(K, coords, v_gt, w_gt, depth_gt):
     """
     Compute motion field equation: u = Av/Z + Bw
     
     Args:
+        K: intrinsic mat
         coords: Normalized coordinates, shape (H,W,3) each point is (x,y,1)
         v_gt: Linear velocity, shape (1,3)
         w_gt: Angular velocity, shape (1,3)
         depth_gt: Depth map, shape (H,W,1)
     
     Returns:
-        optical_flow: Optical flow field, shape (H,W,3), each point is (u,v,0)
+        norm_optical_flow: Optical flow field on normalized plane, shape (H,W,3), each point is (u,v,0)
+        optical_flow: Optical flow field on pixel plane, shape (H,W,3), each point is (u,v,0)
     """
     
     x = coords[..., 0].unsqueeze(-1)  # (H,W,1)
@@ -327,7 +329,13 @@ def compute_motion_field(coords, v_gt, w_gt, depth_gt):
     
     flow_2d = Av_Z + Bw  # (H,W,2)
     
-    optical_flow = torch.zeros_like(coords)
-    optical_flow[..., :2] = flow_2d
+    norm_optical_flow = torch.zeros_like(coords)
+    norm_optical_flow[..., :2] = flow_2d
     
-    return optical_flow
+    fx, fy = K[0,0], K[1,1]
+    print(fx, fy)
+    optical_flow = norm_optical_flow.clone()
+    optical_flow[..., 0] *= fx
+    optical_flow[..., 1] *= fy
+    
+    return norm_optical_flow, optical_flow
