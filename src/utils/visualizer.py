@@ -427,7 +427,7 @@ class Visualizer:
             self._show_or_save_image(wheel, fixed_file_name="color_wheel")
 
     def color_optical_flow(
-        self, flow_x: np.ndarray, flow_y: np.ndarray, max_magnitude=None, ord=1.0
+        self, flow_x: np.ndarray, flow_y: np.ndarray, max_magnitude=None, ord=0.5
     ):
         """Color optical flow.
         Args:
