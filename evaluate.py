@@ -47,12 +47,14 @@ if __name__ == "__main__":
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
     
     # load data
-    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/K_matrix.txt")
-    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/camera_pose.txt")
-    TimeStamps_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/timestamp.txt")
+    K_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/K_matrix.txt")
+    CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/camera_pose.txt")
+    TimeStamps_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/timestamp.txt")
+    depth_folder = '/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/depth'
     K_tensor = misc.load_camera_intrinsic(K_path)
     gt_camera_pose = misc.load_camera_pose(CamPose_path)
     timestamps = misc.load_time_stamps(TimeStamps_path)
+    depth_paths = misc.get_sorted_txt_paths(depth_folder)
     
     # load model 
     flow_field = EventFlowINR(model_config).to(device)
@@ -67,9 +69,10 @@ if __name__ == "__main__":
         normalize_coords_mode="NORM_PLANE", 
         device=device
     )
-    sequence_length = 19
+    sequence_length = 99
     t = torch.linspace(0, 1, steps=sequence_length).view(1, -1).to(device)  # shape: [1, d]
-    time_scale = 1 / timestamps[sequence_length - 1]
+    time_scale = 1 / timestamps[sequence_length]
+    # time_scale = 1
     # t_mid = ((t[0, 1:] + t[0, :-1]) / 2).unsqueeze(0) 
     # U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t, time_scale)
 
@@ -77,10 +80,6 @@ if __name__ == "__main__":
     normalized_pixel_grid = pixel2cam.generate_normalized_coordinate(K_tensor.to(device))
     normalized_pixel_grid = normalized_pixel_grid.squeeze(0)
     pose_optimizer = geometric.PoseOptimizer(image_size, device)
-
-    # valid using gt depth
-    depth_folder = '/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_boxes/depth'
-    depth_paths = misc.get_sorted_txt_paths(depth_folder)
 
     for i in tqdm(range(t.shape[1])):
         depth_gt = np.loadtxt(depth_paths[i])
