@@ -15,6 +15,7 @@ class EventFlowINR(nn.Module):
         self.input_ch = input_ch
         self.output_ch = output_ch
         self.skips = skips
+        # self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
 
         # network
         self.coord_linears = nn.ModuleList(
@@ -43,6 +44,7 @@ class EventFlowINR(nn.Module):
         for i, l in enumerate(self.coord_linears):
             h = self.coord_linears[i](h)
             h = F.relu(h)
+            # h = self.leaky_relu(h)
             if i in self.skips:
                 h = torch.cat([embedded_coord_xyt, h], -1)
        
@@ -111,11 +113,12 @@ class DenseOpticalFlowCalc:
     def extract_flow_from_inr(self, t, time_scale):
         num_points = self.x.shape[0]
         t_batch = t * torch.ones(num_points, device=self.device).to(self.device)
-        txy = torch.stack((t_batch, self.x, self.y), dim=1)
+        txy = torch.stack((t_batch, self.x, self.y), dim=1).unsqueeze(0)
         
         with torch.no_grad():
-            flow = self.model(txy)  # [num_points, 2]
+            flow = self.model(txy)  # [1, num_points, 2]
         
+        flow = flow.squeeze(0)
         u = flow[:, 0]
         v = flow[:, 1]
         U_norm = u.view(self.H, self.W)
