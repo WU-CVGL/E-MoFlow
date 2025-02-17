@@ -272,18 +272,6 @@ class PoseOptimizer:
             w_history = velocity_hist["angular_velocity"].view(-1, 3)
             err = err_hist.view(-1,1)
             return v_opt_tensor, w_opt_tensor, v_history, w_history, err
-        # if only_rotation:
-        #     w_opt = info.best_solution["angular_velocity"]
-        #     w_history = info.state_history["angular_velocity"].view(-1, 3)
-        #     err = info.err_history.view(-1,1)
-        #     return None, w_opt, None, w_history, err
-        # else:
-        #     v_opt = info.best_solution["linear_velocity"] 
-        #     w_opt = info.best_solution["angular_velocity"]
-        #     v_history = info.state_history["linear_velocity"].view(-1, 3)
-        #     w_history = info.state_history["angular_velocity"].view(-1, 3)
-        #     err = info.err_history.view(-1,1)
-        #     return v_opt, w_opt, v_history, w_history, err
         
 def compute_motion_field(K, coords, v_gt, w_gt, depth_gt):
     """
@@ -333,7 +321,6 @@ def compute_motion_field(K, coords, v_gt, w_gt, depth_gt):
     norm_optical_flow[..., :2] = flow_2d
     
     fx, fy = K[0,0], K[1,1]
-    print(fx, fy)
     optical_flow = norm_optical_flow.clone()
     optical_flow[..., 0] *= fx
     optical_flow[..., 1] *= fy
