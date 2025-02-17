@@ -34,8 +34,8 @@ class SyntheticFigureDataProvider(Dataset):
 
     def get_train_data(self, idx) -> Dict:
         event_file_paths = self.dataset.train_event_files_path
-        event_data_list = [np.loadtxt(file) for file in event_file_paths]
-        events = torch.from_numpy(np.vstack(event_data_list))
+        events_numpy = [np.loadtxt(file) for file in event_file_paths]
+        events = torch.from_numpy(np.vstack(events_numpy))
 
         events_norm = event_proc.normalize_events(
             origin_events=events,
@@ -62,8 +62,8 @@ class SyntheticFigureDataProvider(Dataset):
         valid_event_file_paths = misc.get_filenames(
             self.dataset.events_txt_files_path, valid_event_file_indices
         )
-        valid_event_data_list = [np.loadtxt(file) for file in valid_event_file_paths]
-        valid_events = torch.from_numpy(np.vstack(valid_event_data_list))
+        valid_events_numpy = [np.loadtxt(file) for file in valid_event_file_paths]
+        valid_events = torch.from_numpy(np.vstack(valid_events_numpy))
 
         valid_events_norm = event_proc.normalize_events(
             origin_events=valid_events,
