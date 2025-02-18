@@ -69,9 +69,13 @@ if __name__ == "__main__":
         normalize_coords_mode="NORM_PLANE", 
         device=device
     )
-    sequence_length = 99
+    sequence_length = 100
     t = torch.linspace(0, 1, steps=sequence_length).view(1, -1).to(device)  # shape: [1, d]
-    time_scale = 1 / timestamps[sequence_length]
+    # print(len(t[0]))
+    # print(timestamps[sequence_length-1])
+    time_scale = 1 / timestamps[sequence_length - 1]
+    # print(t[0,-1] / time_scale) 
+    # print(t[0,-2] / time_scale) 
     # time_scale = 1
     # t_mid = ((t[0, 1:] + t[0, :-1]) / 2).unsqueeze(0) 
     # U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t, time_scale)
@@ -81,7 +85,7 @@ if __name__ == "__main__":
     normalized_pixel_grid = normalized_pixel_grid.squeeze(0)
     pose_optimizer = geometric.PoseOptimizer(image_size, device)
 
-    for i in tqdm(range(t.shape[1])):
+    for i in tqdm(range(sequence_length)):
         depth_gt = np.loadtxt(depth_paths[i])
         depth_gt = torch.from_numpy(depth_gt).reshape(480,640,1).to(device)
         if(i == 0):
@@ -91,8 +95,48 @@ if __name__ == "__main__":
         v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
         
         gt_optical_flow_norm, gt_optical_flow = geometric.compute_motion_field(K_tensor, normalized_pixel_grid, v_gt, w_gt, depth_gt)
-        
+
         U, V, U_norm, V_norm = flow_calculator.extract_flow_from_inr(t[...,i], time_scale)
+        stacked = torch.stack((U_norm, V_norm), dim=2)
+        zeros = torch.zeros(stacked.shape[:2] + (1,), dtype=stacked.dtype).to(device)
+        pred_optical_flow_norm = torch.cat((stacked, zeros), dim=2)
+        # print(pred_optical_flow_norm.shape)
+        current_coords = normalized_pixel_grid.view(-1,3)
+        current_sparse_flow, indices = flow_calculator.sparsify_flow(
+            gt_optical_flow_norm,
+            sparse_ratio=0.01,
+            threshold=0.0001
+        )
+        current_sparse_coords = current_coords[indices, :]
+
+        noise_level = 0.0
+        v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
+        w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
+        v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+        init_velc = [v_gt_noisy, w_gt_noisy]
+        
+        v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(
+            current_sparse_coords, 
+            current_sparse_flow, 
+            only_rotation=False, 
+            init_velc=init_velc,
+            num_iterations=1000
+        )
+        # _, w_est, _, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=True, init_velc=init_velc)   
+        # v_est = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
+        v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
+        # print(v_his)
+        v_dir_error = vector_math.vector_dir_error_in_degrees(v_est.to(device), v_gt_norm)
+        w_dir_error = vector_math.vector_dir_error_in_degrees(w_est.to(device), w_gt)
+        v_mag_error = vector_math.vector_mag_error(v_est.to(device), v_gt_norm)
+        w_mag_error = vector_math.vector_mag_error(w_est.to(device), w_gt)
+        
+        print(f"======================================================= Pose Optimization =======================================================")
+        print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
+        print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
+        print(f"estimated_linear_velocity:{v_est}, estimated_angular_velocity:{w_est}")
+        print(f"linear_velocity_dir_error:{v_dir_error}, angular_velocity_dir_error:{w_dir_error}")
+        print(f"linear_velocity_mag_error:{v_mag_error}, angular_velocity_mag_error:{w_mag_error}")
         
         # visualize color optical flow
         eval_color_flow, wheel = viz.visualize_optical_flow(
@@ -132,13 +176,14 @@ if __name__ == "__main__":
         # metric
         gt_optical_flow = gt_optical_flow[..., :2].permute(2, 0, 1).unsqueeze(0)
         pred_optical_flow = torch.stack([U, V], dim=2).permute(2, 0, 1).unsqueeze(0)
-        error = metric.calculate_flow_error(
+        error, endpoint_error = metric.calculate_flow_error(
             flow_gt=gt_optical_flow, 
             flow_pred=pred_optical_flow,
             event_mask=None,
             time_scale=None
         )
         
+        error_map = metric.visualize_endpoint_error(endpoint_error)
         # misc.save_flow("./outputs/flowmap/boxes_gt.png", gt_optical_flow.cpu().numpy())
         
         # upload wandb
@@ -147,6 +192,11 @@ if __name__ == "__main__":
         wandb_logger.write("1PE", error["1PE"].item())
         wandb_logger.write("2PE", error["2PE"].item())
         wandb_logger.write("3PE", error["3PE"].item())
+        wandb_logger.write("v_dir_error", v_dir_error)
+        wandb_logger.write("w_dir_error", w_dir_error)
+        wandb_logger.write("v_mag_error", v_mag_error)
+        wandb_logger.write("w_mag_error", w_mag_error)
+        wandb_logger.write_img("error_map", error_map.cpu().numpy())
         wandb_logger.write_img("evaluate_dense_optical_flow", eval_color_flow)
         wandb_logger.write_img("evaluate_optical_flow_arrow", eval_arrow_flow)
         wandb_logger.write_img("gt_dense_optical_flow", gt_color_flow)
@@ -155,35 +205,5 @@ if __name__ == "__main__":
         wandb_logger.update_buffer()
         
         
-        # current_coords = normalized_pixel_grid.view(-1,3)
-        # current_sparse_flow, indices = flow_calculator.sparsify_flow(
-        #     gt_optical_flow,
-        #     sparse_ratio=0.05,
-        #     threshold=0.0001
-        # )
-        # current_sparse_coords = current_coords[indices, :]
-
-        # noise_level = 0.0
-        # v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
-        # w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
-        # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-        # init_velc = [v_gt_noisy, w_gt_noisy]
-        
-        # v_est, w_est, v_his, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=False, init_velc=init_velc)
-        # # _, w_est, _, w_his, err_his = pose_optimizer.optimize(current_sparse_coords, current_sparse_flow, only_rotation=True, init_velc=init_velc)   
-        # v_est = v_est / torch.norm(v_est, p=2, dim=-1, keepdim=True)
-        # print(f"======================================================= Pose Optimization =======================================================")
-        # print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
-        # print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
-        # print(f"estimated_linear_velocity:{v_est}, estimated_angular_velocity:{w_est}")
-        # print(f"linear_velocity_error:{vector_math.compute_vector_angle_in_degrees(v_est.to(device), v_gt)}, angular_velocity_error:{vector_math.compute_vector_angle_in_degrees(w_est.to(device), w_gt)}")
-        # print(f"dec_last_error:{err_his[-1]}")
-        
-        # print(f"======================================================= Pose Optimization =======================================================")
-        # print(f"groundtruth_angular_velocity:{w_gt}")
-        # print(f"intial_angular_velocity:{init_velc[1]}")
-        # print(f"estimated_angular_velocity:{w_est}")
-        # print(f"angular_velocity_error:{vector_math.compute_vector_angle_in_degrees(w_est.to(device), w_gt)}")
-        # print(f"dec_last_error:{err_his[-1]}")
-        
+    
 
