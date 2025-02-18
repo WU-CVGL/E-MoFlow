@@ -8,10 +8,11 @@ import torch.nn.functional as F
 
 from tqdm import tqdm
 from src.loss.focus import FocusLoss
-from src.loss.motion import VelocityLoss
+from src.loss.motion import MotionLoss
 from src.utils import misc
 from src.utils import pose
 from src.utils import event_proc
+from src.utils import vector_math
 from src.utils import load_config
 from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
@@ -65,6 +66,8 @@ if __name__ == "__main__":
     [start_index, end_index] = provider.sequence_indices
     end_time, start_time = gt_camera_pose[...,0][end_index], gt_camera_pose[...,0][start_index] 
     time_scale = torch.Tensor(1 / (end_time - start_time)).to(device)
+    print(start_index, end_index)
+    print(time_scale)
     
     # event2img converter
     image_size = (data_config["hight"], data_config["weight"])
@@ -87,7 +90,7 @@ if __name__ == "__main__":
     # instantiate criterion
     grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
     var_criterion = FocusLoss(loss_type="variance", norm="l1")
-    motion_criterion = VelocityLoss(alpha=0.4, beta=0.4, gamma=0.8)
+    motion_criterion = MotionLoss(loss_type="MSE")
     
     # prepare data to valid
     valid_data = provider.get_valid_data(config["valid"]["file_idx"])
@@ -127,6 +130,7 @@ if __name__ == "__main__":
 
             # warp by neural ode 
             warped_norm_txy = warpper.warp_events(norm_txy, t_ref, method=warp_config["solver"])
+            # warped_norm_txy = warpper.warp_events(norm_txy, t_ref).unsqueeze(0)
 
             # create image warped event    
             num_iwe = warped_norm_txy.shape[0]
@@ -149,27 +153,27 @@ if __name__ == "__main__":
 
             # CMax loss
             if num_iwe == 1:
-                # var_loss = torch.Tensor([0]).to(device)
                 var_loss = var_criterion(iwes)
                 grad_loss = grad_criterion(iwes)
-                # var_loss = focus.calculate_focus_loss(iwes, loss_type='variance')
-                # grad_loss = focus.calculate_focus_loss(iwes, loss_type='gradient_magnitude', norm='l1')
             elif num_iwe > 1:
-                var_loss = torch.Tensor([0]).to(device)
-                # var_loss = focus.calculate_focus_loss(iwe, loss_type='variance')
-                # grad_loss_t_min = focus.calculate_focus_loss(iwes[0].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                # grad_loss_t_mid = focus.calculate_focus_loss(iwes[len(iwes)//2].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                # grad_loss_t_max = focus.calculate_focus_loss(iwes[-1].unsqueeze(0), loss_type='gradient_magnitude', norm='l1')
-                # grad_loss_origin = focus.calculate_focus_loss(origin_iwe, loss_type='gradient_magnitude', norm='l1')
-
+                # var_loss = torch.Tensor([0]).to(device)
                 grad_loss_t_min = grad_criterion(iwes[0].unsqueeze(0))
                 grad_loss_t_mid = grad_criterion(iwes[len(iwes)//2].unsqueeze(0))
                 grad_loss_t_max = grad_criterion(iwes[-1].unsqueeze(0))
                 grad_loss_origin = grad_criterion(origin_iwe)
-                
                 grad_loss = (grad_loss_t_min + grad_loss_t_max + 2 * grad_loss_t_mid) / 4 * grad_loss_origin
+                
+                var_loss_t_min = var_criterion(iwes[0].unsqueeze(0))
+                var_loss_t_mid = var_criterion(iwes[len(iwes)//2].unsqueeze(0))
+                var_loss_t_max = var_criterion(iwes[-1].unsqueeze(0))
+                var_loss_origin = var_criterion(origin_iwe)
+                var_loss = (var_loss_t_min + var_loss_t_max + 2 * var_loss_t_mid) / 4 * var_loss_origin
             
             # sample coordinates
+            # event_mask = (iwes == 1.0)
+            # event_exist_mask = event_exist_mask.to(dtype=iwes.dtype)
+            # wandb_logger.write_img("event_exist_mask", event_exist_mask.detach().cpu().numpy() * 255)
+            
             sample_coords = pixel2cam.sample_sparse_points(sparsity_level=(48*64), norm_coords=norm_coords)
             t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
             sample_norm_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
@@ -182,13 +186,15 @@ if __name__ == "__main__":
             # get gt velocity
             v_gt, w_gt = pose.pose_to_velocity(t_ref / time_scale, gt_camera_pose)
             v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
-            v_gt = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
+            v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
             # intial value for differential epipolar constrain
             noise_level = 0.0
             v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
             w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
-            # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+            v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+            # v_init = torch.zeros_like(v_gt, device=v_gt.device)
+            # w_init = torch.zeros_like(v_gt, device=v_gt.device)
             init_velc = [v_gt_noisy, w_gt_noisy]
             
             # theseus optimize 
@@ -198,16 +204,26 @@ if __name__ == "__main__":
                 init_velc=init_velc,
                 num_iterations=100
             )
-            # print(f"linear velocity history:\n {v_his[::10,...]}")
-            # print(f"angular_velocity velocity history:\n {w_his[::10,...]}")
+            
+            v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt.to(device), v_gt_norm)
+            w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt.to(device), w_gt)
+            v_mag_error = vector_math.vector_mag_error(v_opt.to(device), v_gt_norm)
+            w_mag_error = vector_math.vector_mag_error(w_opt.to(device), w_gt)
+            
+            # print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
+            # print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
+            # print(f"estimated_linear_velocity:{v_opt}, estimated_angular_velocity:{w_opt}")
+            # print(f"linear_velocity_dir_error:{v_dir_error}, angular_velocity_error:{w_dir_error}")
+            # print(f"linear_velocity_angle_error:{v_mag_error}, angular_velocity_error:{w_mag_error}")
+            
             # Motion loss
-            motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt)
-            # motion_loss = torch.Tensor([0]).to(device)
+            # motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt_norm)
+            motion_loss = torch.Tensor([0]).to(device)
             
             # Total loss
             alpha, beta, gamma = 1, 1, 1
             scaled_grad_loss =  alpha * grad_loss / 8.0
-            scaled_var_loss = beta * var_loss / 31.0
+            scaled_var_loss = beta * var_loss / 31.0 
             scaled_motion_loss = gamma * motion_loss
             total_loss = - scaled_grad_loss - scaled_var_loss + scaled_motion_loss
             
@@ -215,7 +231,11 @@ if __name__ == "__main__":
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
             wandb_logger.write("motion_loss", scaled_motion_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
-
+            wandb_logger.write("v_dir_error", v_dir_error.item())
+            wandb_logger.write("w_dir_error", w_dir_error.item())
+            wandb_logger.write("v_mag_error", v_mag_error.item())
+            wandb_logger.write("w_mag_error", w_mag_error.item())
+            
             # NN optimize
             total_loss.backward()
             optimizer.step()
@@ -235,6 +255,7 @@ if __name__ == "__main__":
             with torch.no_grad():
                 valid_ref = warpper.get_reference_time(valid_norm_txy, "min")
                 valid_warped_norm_txy = warpper.warp_events(valid_norm_txy, valid_ref, method=warp_config["solver"])
+                # valid_warped_norm_txy = warpper.warp_events(valid_norm_txy, valid_ref).unsqueeze(0)
                 # create image warped event 
                 num_iwe_valid = valid_warped_norm_txy.shape[0]
                 num_events_valid = valid_warped_norm_txy.shape[1]          
