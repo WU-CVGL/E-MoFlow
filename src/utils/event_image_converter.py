@@ -68,16 +68,15 @@ class EventImageConverter(object):
         if is_numpy(events):
             iwes = self.create_image_from_events_numpy(events, method, sigma=sigma)
         elif is_torch(events):
-            blur_iwes, iwes = self.create_image_from_events_tensor(events, method, sigma=sigma, blur=blur)
+            iwes = self.create_image_from_events_tensor(events, method, sigma=sigma, blur=blur)
         else:
             e = f"Non-supported type of events. {type(events)}"
             logger.error(e)
             raise RuntimeError(e)
         
         if len(iwes.shape) == 2:
-            blur_iwes = blur_iwes[None]
             iwes = iwes[None]
-        return blur_iwes, iwes
+        return iwes
 
     def create_eventmask(self, events: NUMPY_TORCH) -> NUMPY_TORCH:
         """Create mask image where at least one event exists.
@@ -172,8 +171,8 @@ class EventImageConverter(object):
             elif len(image.shape) == 3:
                 image = image[:, None, ...]
             if blur == True:
-                blur_image = gaussian_blur(image, kernel_size=3, sigma=sigma)
-        return torch.squeeze(blur_image), torch.squeeze(image)
+                image = gaussian_blur(image, kernel_size=3, sigma=sigma)
+        return torch.squeeze(image)
 
     def count_event_numpy(self, events: np.ndarray):
         """Count event and make image.
