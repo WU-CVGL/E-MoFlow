@@ -50,7 +50,7 @@ def calculate_flow_error(
     gt_masked = flow_gt * total_mask  # b, 2, H, W
     pred_masked = flow_pred * total_mask
     n_points = torch.sum(total_mask, dim=(1, 2, 3)) + 1e-5  # B, 1
-
+    
     errors = {}
     # Average endpoint error.
     if time_scale is not None:
