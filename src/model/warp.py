@@ -68,6 +68,7 @@ class NeuralODEWarp:
             pred_flow = self.flow_calculator.forward(current_state)  # [1, n, 2] or [m, n, 2]
             new_state = current_state.clone()
             new_state[..., 1:] += pred_flow * dt.unsqueeze(-1)
+            # new_state[..., 1:] += pred_flow * torch.sign(dt.unsqueeze(-1))
             new_state[..., 0] += dt.squeeze()
             return new_state
         

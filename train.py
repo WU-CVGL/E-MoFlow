@@ -100,7 +100,12 @@ if __name__ == "__main__":
     valid_norm_txy = valid_events_norm[:, :-1].float().to(device)
 
     # display origin valid data
-    valid_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
+    blur_valid_origin_iwe, valid_origin_iwe = converter.create_iwes(
+        events=valid_events[:, [2,1,0,3]],
+        method="bilinear_vote",
+        sigma=1.0,
+        blur=True
+    )
     wandb_logger.write_img("iwe", valid_origin_iwe.detach().cpu().numpy() * 255)
     wandb_logger.update_buffer()
 
@@ -123,7 +128,12 @@ if __name__ == "__main__":
             events_norm = sample["events_norm"].squeeze(0)
             timestamps = sample["timestamps"].squeeze(0)
             norm_txy = events_norm[:, :-1].float().to(device)
-            origin_iwe = converter.create_iwes(events[:, [2,1,0,3]])
+            blur_origin_iwe, origin_iwe = converter.create_iwes(
+                events=events[:, [2,1,0,3]],
+                method="bilinear_vote",
+                sigma=1.0,
+                blur=True
+            )
 
             # get t_ref
             t_ref = warpper.get_reference_time(norm_txy, warp_config["tref_setting"])
@@ -144,7 +154,7 @@ if __name__ == "__main__":
             # (x,y,t,p) ——> (y,x,t,p)
             warped_events = warped_events[...,[1,0,2,3]]
             # events should be reorganized as (y,x,t,p) that can processed by create_iwes
-            iwes = converter.create_iwes(
+            blur_iwes, iwes = converter.create_iwes(
                 events=warped_events,
                 method="bilinear_vote",
                 sigma=1.0,
@@ -173,7 +183,6 @@ if __name__ == "__main__":
             # event_mask = (iwes == 1.0)
             # event_exist_mask = event_exist_mask.to(dtype=iwes.dtype)
             # wandb_logger.write_img("event_exist_mask", event_exist_mask.detach().cpu().numpy() * 255)
-            
             sample_coords = pixel2cam.sample_sparse_points(sparsity_level=(48*64), norm_coords=norm_coords)
             t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
             sample_norm_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
@@ -268,11 +277,11 @@ if __name__ == "__main__":
                 )
                 valid_warped_events = valid_warped_events[...,[1,0,2,3]]
             
-                optimized_iwe = converter.create_iwes(
+                blur_optimized_iwe, optimized_iwe = converter.create_iwes(
                     events=valid_warped_events,
                     method="bilinear_vote",
                     sigma=1.0,
-                    blur=False
+                    blur=True
                 )
                 wandb_logger.write_img("iwe", optimized_iwe.detach().cpu().numpy() * 255)
             time_analyzer.end_valid()
