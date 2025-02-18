@@ -141,7 +141,7 @@ class PoseOptimizer:
             aux_vars = [x, u]
             w_dec_value = torch.tensor(1.0 / x.shape[1], dtype=torch.float32)
             w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
-            w_norm_value = torch.tensor(100, dtype=torch.float32) 
+            w_norm_value = torch.tensor(1, dtype=torch.float32) 
             w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
         
             dec_cost_fn = th.AutoDiffCostFunction(
@@ -181,7 +181,7 @@ class PoseOptimizer:
             )
             
             return [rot_cost_fn]
-    
+        
     def optimize(self, normalized_coords, optical_flow, only_rotation=False, init_velc=None, num_iterations=5000):
         # check
         assert normalized_coords.shape[-1] == 3, "[ERROR] Normalized coordinates should be in homogeneous form [x,y,1]"
@@ -192,8 +192,23 @@ class PoseOptimizer:
             normalized_coords = normalized_coords.unsqueeze(0)
         if optical_flow.dim() == 2:
             optical_flow = optical_flow.unsqueeze(0)
-
-        # data
+        
+        objective = th.Objective()
+        cost_functions = self.create_cost_function(
+            normalized_coords, optical_flow, only_rotation
+        )
+        for cost_fn in cost_functions:
+            objective.add(cost_fn)
+            
+        optimizer = th.LevenbergMarquardt(
+            objective,
+            max_iterations=num_iterations,
+            linear_solver_cls=th.CholeskyDenseSolver,
+            linearization_cls=th.DenseLinearization,
+            vectorize=True,
+            step_size=1,
+        )
+        
         if init_velc is not None:
             if only_rotation:
                 w_init = init_velc[1] if len(init_velc) > 1 else init_velc[0]
@@ -213,65 +228,137 @@ class PoseOptimizer:
             theseus_inputs["linear_velocity"] = v_init
         theseus_inputs["angular_velocity"] = w_init
         
-        # create cost function
-        objective = th.Objective()
-        cost_functions = self.create_cost_function(
-            normalized_coords, optical_flow, only_rotation
-        )
-        for cost_fn in cost_functions:
-            objective.add(cost_fn)
-        
-        # create second-order optimizer
-        theseus_optimizer = th.LevenbergMarquardt(
-            objective,
-            linear_solver_cls=th.CholeskyDenseSolver,
-            linearization_cls=th.DenseLinearization,
-            max_iterations=num_iterations,
-            step_size=1,
-        )
-        
-        # create theseus layer
-        theseus_layer = th.TheseusLayer(theseus_optimizer).to(self.device)
-        
-        # forward optimize
-        updated_inputs, info = theseus_layer.forward(
+        theseus_optim = th.TheseusLayer(optimizer).to(self.device)
+        updated_inputs, info = theseus_optim.forward(
             theseus_inputs,
             optimizer_kwargs={
-                "damping": 0.1,
-                # "track_best_solution": False,
+                # "track_best_solution": True,
                 "track_state_history": True,
                 "track_err_history": True,
                 "verbose": False,
-                "backward_mode": "implicit",
+                "backward_mode": "implicit"
             },
         )
         
-        # final_linearization = optimizer.linear_solver.linearization
-        # hessian = final_linearization.AtA  # [6,6]
-        
-        optimizer_info: th.NonlinearOptimizerInfo = cast(
-            th.NonlinearOptimizerInfo, info
-        )
-        err_hist = optimizer_info.err_history
-        velocity_hist = optimizer_info.state_history
-
-        v_opt_tensor = theseus_layer.objective.get_optim_var("linear_velocity").tensor
-        w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor
-        
-        # final_linearization = optimizer.linear_solver.linearization
-        # hessian = final_linearization.AtA  # [6,6]
         if only_rotation:
-            w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor.to(self.device)
-            w_history = velocity_hist["angular_velocity"].view(-1, 3)
-            err = err_hist.view(-1,1)
-            return None, w_opt_tensor, None, w_history, err
+            # w_opt = info.best_solution["angular_velocity"]  
+            w_opt = updated_inputs["angular_velocity"]
+            w_history = info.state_history["angular_velocity"].view(-1, 3)
+            err = info.err_history.view(-1,1)
+            return None, w_opt, None, w_history, err
         else:
-            v_opt_tensor = theseus_layer.objective.get_optim_var("linear_velocity").tensor
-            w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor
-            v_history = velocity_hist["linear_velocity"].view(-1, 3)
-            w_history = velocity_hist["angular_velocity"].view(-1, 3)
-            err = err_hist.view(-1,1)
-            return v_opt_tensor, w_opt_tensor, v_history, w_history, err
+            # v_opt = info.best_solution["linear_velocity"] 
+            # w_opt = info.best_solution["angular_velocity"]
+            v_opt = updated_inputs["linear_velocity"]
+            w_opt = updated_inputs["angular_velocity"]
+            v_history = info.state_history["linear_velocity"].view(-1, 3)
+            w_history = info.state_history["angular_velocity"].view(-1, 3)
+            err = info.err_history.view(-1,1)
+            return v_opt, w_opt, v_history, w_history, err
+    
+    # def optimize(self, normalized_coords, optical_flow, only_rotation=False, init_velc=None, num_iterations=5000):
+    #     # check
+    #     assert normalized_coords.shape[-1] == 3, "[ERROR] Normalized coordinates should be in homogeneous form [x,y,1]"
+    #     assert optical_flow.shape[-1] == 3, "[ERROR] Optical flow should be in homogeneous form [u,v,0]"
+    #     assert normalized_coords.shape[:-1] == optical_flow.shape[:-1], "[ERROR] Batch dimensions should match"
+        
+    #     if normalized_coords.dim() == 2:
+    #         normalized_coords = normalized_coords.unsqueeze(0)
+    #     if optical_flow.dim() == 2:
+    #         optical_flow = optical_flow.unsqueeze(0)
+
+    #     # data
+    #     if init_velc is not None:
+    #         if only_rotation:
+    #             w_init = init_velc[1] if len(init_velc) > 1 else init_velc[0]
+    #         else:
+    #             v_init, w_init = init_velc
+    #     else:
+    #         if not only_rotation:
+    #             v_init = torch.rand((1,3), device=self.device) 
+    #             v_init = v_init / torch.norm(v_init+1e-9, p=2, dim=-1, keepdim=True)
+    #         w_init = torch.rand((1,3), device=self.device) 
+        
+    #     theseus_inputs = {
+    #         "norm_coords": normalized_coords,
+    #         "optical_flow": optical_flow
+    #     }
+    #     if not only_rotation:
+    #         theseus_inputs["linear_velocity"] = v_init
+    #     theseus_inputs["angular_velocity"] = w_init
+        
+    #     # create cost function
+    #     objective = th.Objective()
+    #     cost_functions = self.create_cost_function(
+    #         normalized_coords, optical_flow, only_rotation
+    #     )
+    #     for cost_fn in cost_functions:
+    #         objective.add(cost_fn)
+        
+    #     # create second-order optimizer
+    #     theseus_optimizer = th.LevenbergMarquardt(
+    #         objective,
+    #         linear_solver_cls=th.CholeskyDenseSolver,
+    #         linearization_cls=th.DenseLinearization,
+    #         max_iterations=num_iterations,
+    #         step_size=1,
+    #     )
+        
+    #     # create theseus layer
+    #     theseus_layer = th.TheseusLayer(theseus_optimizer).to(self.device)
+        
+    #     # forward optimize
+    #     updated_inputs, info = theseus_layer.forward(
+    #         theseus_inputs,
+    #         optimizer_kwargs={
+    #             # "damping": 0.1,
+    #             "track_best_solution": True,
+    #             "track_state_history": True,
+    #             "track_err_history": True,
+    #             "verbose": True,
+    #             "backward_mode": "implicit",
+    #         },
+    #     )
+        
+    #     if only_rotation:
+    #         w_opt = info.best_solution["angular_velocity"]
+    #         w_history = info.state_history["angular_velocity"].view(-1, 3)
+    #         err = info.err_history.view(-1,1)
+    #         return None, w_opt, None, w_history, err
+    #     else:
+    #         v_opt = info.best_solution["linear_velocity"] 
+    #         w_opt = info.best_solution["angular_velocity"]
+    #         v_history = info.state_history["linear_velocity"].view(-1, 3)
+    #         w_history = info.state_history["angular_velocity"].view(-1, 3)
+    #         err = info.err_history.view(-1,1)
+    #         return v_opt, w_opt, v_history, w_history, err
+        
+        # final_linearization = optimizer.linear_solver.linearization
+        # hessian = final_linearization.AtA  # [6,6]
+        
+        # optimizer_info: th.NonlinearOptimizerInfo = cast(
+        #     th.NonlinearOptimizerInfo, info
+        # )
+        # err_hist = optimizer_info.err_history
+        # velocity_hist = optimizer_info.state_history
+
+        # v_opt_tensor = theseus_layer.objective.get_optim_var("linear_velocity").tensor
+        # w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor
+        
+        # # final_linearization = optimizer.linear_solver.linearization
+        # # hessian = final_linearization.AtA  # [6,6]
+        # if only_rotation:
+        #     w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor.to(self.device)
+        #     w_history = velocity_hist["angular_velocity"].view(-1, 3)
+        #     err = err_hist.view(-1,1)
+        #     return None, w_opt_tensor, None, w_history, err
+        # else:
+        #     v_opt_tensor = theseus_layer.objective.get_optim_var("linear_velocity").tensor
+        #     w_opt_tensor = theseus_layer.objective.get_optim_var("angular_velocity").tensor
+        #     v_history = velocity_hist["linear_velocity"].view(-1, 3)
+        #     w_history = velocity_hist["angular_velocity"].view(-1, 3)
+        #     err = err_hist.view(-1,1)
+        #     return v_opt_tensor, w_opt_tensor, v_history, w_history, err
         
 def compute_motion_field(K, coords, v_gt, w_gt, depth_gt):
     """
