@@ -3,7 +3,7 @@ import logging
 import torch.nn as nn
 from src.model.eventflow import EventFlowINR
 from torchdiffeq import odeint_adjoint
-# EPS = 1e-9
+EPS = 1e-5
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ class NeuralODEWarp:
         Returns:
             torch.Tensor: A scalar or tensor based on tref_setting.
         """
-        t_min = torch.min(batch_txy[:, 0]) 
-        t_max = torch.max(batch_txy[:, 0]) 
+        t_min = torch.min(batch_txy[:, 0]) + EPS
+        t_max = torch.max(batch_txy[:, 0]) - EPS
         t_mid = (t_max + t_min) / 2
 
         if tref_setting == 'min':

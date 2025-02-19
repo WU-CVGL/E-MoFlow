@@ -100,12 +100,7 @@ if __name__ == "__main__":
     valid_norm_txy = valid_events_norm[:, :-1].float().to(device)
 
     # display origin valid data
-    valid_origin_iwe = converter.create_iwes(
-        events=valid_events[:, [2,1,0,3]],
-        method="bilinear_vote",
-        sigma=1.0,
-        blur=False
-    )
+    valid_origin_iwe = converter.create_iwes(valid_events[:, [2,1,0,3]])
     wandb_logger.write_img("iwe", valid_origin_iwe.detach().cpu().numpy() * 255)
     wandb_logger.update_buffer()
 
@@ -128,12 +123,7 @@ if __name__ == "__main__":
             events_norm = sample["events_norm"].squeeze(0)
             timestamps = sample["timestamps"].squeeze(0)
             norm_txy = events_norm[:, :-1].float().to(device)
-            origin_iwe = converter.create_iwes(
-                events=events[:, [2,1,0,3]],
-                method="bilinear_vote",
-                sigma=1.0,
-                blur=True
-            )
+            origin_iwe = converter.create_iwes(events[:, [2,1,0,3]])
 
             # get t_ref
             t_ref = warpper.get_reference_time(norm_txy, warp_config["tref_setting"])
@@ -157,10 +147,10 @@ if __name__ == "__main__":
             iwes = converter.create_iwes(
                 events=warped_events,
                 method="bilinear_vote",
-                sigma=1.0,
+                sigma=1,
                 blur=True
             ) # [n,h,w] n can be one or multi
-
+            # print(iwes)
             # CMax loss
             if num_iwe == 1:
                 var_loss = var_criterion(iwes)
@@ -180,7 +170,8 @@ if __name__ == "__main__":
                 var_loss = (var_loss_t_min + var_loss_t_max + 2 * var_loss_t_mid) / 4 * var_loss_origin
             
             # sample coordinates
-            # event_mask = (iwes == 1.0)
+            event_mask = converter.create_eventmask(warped_events)
+            # print(event_mask.shape)
             # event_exist_mask = event_exist_mask.to(dtype=iwes.dtype)
             # wandb_logger.write_img("event_exist_mask", event_exist_mask.detach().cpu().numpy() * 255)
             sample_coords = pixel2cam.sample_sparse_points(sparsity_level=(48*64), norm_coords=norm_coords)
@@ -280,7 +271,7 @@ if __name__ == "__main__":
                 optimized_iwe = converter.create_iwes(
                     events=valid_warped_events,
                     method="bilinear_vote",
-                    sigma=1.0,
+                    sigma=1,
                     blur=False
                 )
                 wandb_logger.write_img("iwe", optimized_iwe.detach().cpu().numpy() * 255)
