@@ -2,7 +2,8 @@ import torch
 import logging
 import torch.nn as nn
 from src.model.eventflow import EventFlowINR
-from torchdiffeq import odeint_adjoint
+# from torchdiffeq import odeint_adjoint
+
 EPS = 1e-5
 
 logger = logging.getLogger(__name__)

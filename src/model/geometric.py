@@ -74,6 +74,30 @@ class Pixel2Cam:
             if n % i == 0:
                 return i, n // i
         return 1, n
+    
+    def sample_sparse_coordinates(
+        self,
+        coord_tensor: torch.Tensor, 
+        mask: torch.Tensor, 
+        n: int
+    ) -> torch.Tensor:
+        assert coord_tensor.dim() == 4 and coord_tensor.shape[0] == 1, "坐标张量形状应为 [1, H, W, 3]"
+        H, W = coord_tensor.shape[1], coord_tensor.shape[2]
+        assert mask.shape == (H, W), "掩码形状与坐标张量不匹配"
+        
+        valid_coords = coord_tensor[0][mask.bool()]  # [num_valid, 3]
+        num_valid = valid_coords.shape[0]
+        
+        if num_valid == 0:
+            return torch.zeros((1, 0, 3), device=coord_tensor.device)
+        
+        n_samples = min(n, num_valid)
+    
+        rand_idx = torch.randperm(num_valid, device=valid_coords.device)[:n_samples]
+        sampled_coords = valid_coords[rand_idx]  # [n_samples, 3]
+        
+        # [1, n_samples, 3]
+        return sampled_coords.unsqueeze(0)
 
 class PoseOptimizer:
     def __init__(self, image_size, device="cuda"):

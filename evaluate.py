@@ -18,6 +18,8 @@ from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.utils.visualizer import Visualizer
 from src.model.eventflow import DenseOpticalFlowCalc
+from src.dataset_loader import dataset_manager
+from src.utils.event_image_converter import EventImageConverter
 
 torch.set_float32_matmul_precision('high')
 
@@ -51,10 +53,16 @@ if __name__ == "__main__":
     CamPose_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/camera_pose.txt")
     TimeStamps_path = Path("/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/timestamp.txt")
     depth_folder = '/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/depth'
+    events_folder = '/run/determined/workdir/ssd_data/Event_Dataset/Blender/final_motion_oneWall/events'
     K_tensor = misc.load_camera_intrinsic(K_path)
     gt_camera_pose = misc.load_camera_pose(CamPose_path)
     timestamps = misc.load_time_stamps(TimeStamps_path)
     depth_paths = misc.get_sorted_txt_paths(depth_folder)
+    events_paths = misc.get_sorted_txt_paths(events_folder)
+    
+    # event2img converter
+    image_size = (data_config["hight"], data_config["weight"])
+    converter = EventImageConverter(image_size)
     
     # load model 
     flow_field = EventFlowINR(model_config).to(device)
@@ -86,6 +94,11 @@ if __name__ == "__main__":
     pose_optimizer = geometric.PoseOptimizer(image_size, device)
 
     for i in tqdm(range(sequence_length)):
+        events = torch.from_numpy(np.loadtxt(events_paths[i])).to(device)
+        events = events[:, [2,1,0,3]]
+        events_mask = converter.create_eventmask(events)
+        events_mask = events_mask[0].squeeze(0)
+        
         depth_gt = np.loadtxt(depth_paths[i])
         depth_gt = torch.from_numpy(depth_gt).reshape(480,640,1).to(device)
         if(i == 0):
@@ -103,7 +116,7 @@ if __name__ == "__main__":
         # print(pred_optical_flow_norm.shape)
         current_coords = normalized_pixel_grid.view(-1,3)
         current_sparse_flow, indices = flow_calculator.sparsify_flow(
-            gt_optical_flow_norm,
+            pred_optical_flow_norm,
             sparse_ratio=0.01,
             threshold=0.0001
         )
@@ -179,7 +192,7 @@ if __name__ == "__main__":
         error, endpoint_error = metric.calculate_flow_error(
             flow_gt=gt_optical_flow, 
             flow_pred=pred_optical_flow,
-            event_mask=None,
+            event_mask=events_mask,
             time_scale=None
         )
         
@@ -196,6 +209,7 @@ if __name__ == "__main__":
         wandb_logger.write("w_dir_error", w_dir_error)
         wandb_logger.write("v_mag_error", v_mag_error)
         wandb_logger.write("w_mag_error", w_mag_error)
+        wandb_logger.write_img("events_mask", events_mask.cpu().numpy() * 255)
         wandb_logger.write_img("error_map", error_map.cpu().numpy())
         wandb_logger.write_img("evaluate_dense_optical_flow", eval_color_flow)
         wandb_logger.write_img("evaluate_optical_flow_arrow", eval_arrow_flow)

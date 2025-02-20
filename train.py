@@ -170,11 +170,17 @@ if __name__ == "__main__":
                 var_loss = (var_loss_t_min + var_loss_t_max + 2 * var_loss_t_mid) / 4 * var_loss_origin
             
             # sample coordinates
-            event_mask = converter.create_eventmask(warped_events)
+            events_mask = converter.create_eventmask(warped_events)
+            events_mask = events_mask[0].squeeze(0).to(device)
+            sample_coords = pixel2cam.sample_sparse_coordinates(
+                coord_tensor=norm_coords,
+                mask=events_mask,
+                n=10000
+            )
             # print(event_mask.shape)
             # event_exist_mask = event_exist_mask.to(dtype=iwes.dtype)
             # wandb_logger.write_img("event_exist_mask", event_exist_mask.detach().cpu().numpy() * 255)
-            sample_coords = pixel2cam.sample_sparse_points(sparsity_level=(48*64), norm_coords=norm_coords)
+            # sample_coords = pixel2cam.sample_sparse_points(sparsity_level=(48*64), norm_coords=norm_coords)
             t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
             sample_norm_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
             
@@ -189,7 +195,7 @@ if __name__ == "__main__":
             v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
             # intial value for differential epipolar constrain
-            noise_level = 0.0
+            noise_level = 0.01
             v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
             w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
             v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
@@ -217,8 +223,10 @@ if __name__ == "__main__":
             # print(f"linear_velocity_angle_error:{v_mag_error}, angular_velocity_error:{w_mag_error}")
             
             # Motion loss
-            # motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt_norm)
-            motion_loss = torch.Tensor([0]).to(device)
+            if i >= 299:
+                motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt_norm)
+            else:
+                motion_loss = torch.Tensor([0]).to(device)
             
             # Total loss
             alpha, beta, gamma = 1, 1, 1
