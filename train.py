@@ -23,6 +23,8 @@ from src.dataset_loader import dataset_manager
 from src.model.eventflow import DenseOpticalFlowCalc
 from src.utils.event_image_converter import EventImageConverter
 
+from src.utils.vector_math import vector_to_skew_matrix
+
 # log
 logging.basicConfig(
     handlers=[
@@ -192,29 +194,45 @@ if __name__ == "__main__":
             # get gt velocity
             v_gt, w_gt = pose.pose_to_velocity(t_ref / time_scale, gt_camera_pose)
             v_gt, w_gt = v_gt.unsqueeze(0).to(device), w_gt.unsqueeze(0).to(device)
-            v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
+            # v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
+            
+            
+            x_batch_tensor = sample_coords.squeeze(0)
+            u_batch_tensor = sample_flow.squeeze(0)
+            v_skew = vector_to_skew_matrix(v_gt).squeeze(0)
+            w_skew = vector_to_skew_matrix(w_gt).squeeze(0)
+            
+            s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
+            
+            v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
+            s_x = torch.matmul(s, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
+            
+            term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1) # [N]
+            term2 = torch.sum(x_batch_tensor * s_x, dim=1)  # [N]
+            error = term1 - term2   
+            error = error.unsqueeze(0)
+            dec_loss = torch.mean(torch.square(error))
+            
             
             # intial value for differential epipolar constrain
-            noise_level = 0.01
-            v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
-            w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
-            v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-            # v_init = torch.zeros_like(v_gt, device=v_gt.device)
-            # w_init = torch.zeros_like(v_gt, device=v_gt.device)
-            init_velc = [v_gt_noisy, w_gt_noisy]
+            # noise_level = 0.01
+            # v_gt_noisy = v_gt + noise_level * torch.randn_like(v_gt, device=v_gt.device)
+            # w_gt_noisy = w_gt + noise_level * torch.randn_like(w_gt, device=w_gt.device)
+            # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+            # init_velc = [v_gt_noisy, w_gt_noisy]
             
-            # theseus optimize 
-            v_opt, w_opt, v_his, w_his, err_his = pose_optimizer.optimize(
-                sample_coords, sample_flow, 
-                only_rotation=False, 
-                init_velc=init_velc,
-                num_iterations=100
-            )
+            # # theseus optimize 
+            # v_opt, w_opt, v_his, w_his, err_his = pose_optimizer.optimize(
+            #     sample_coords, sample_flow, 
+            #     only_rotation=False, 
+            #     init_velc=init_velc,
+            #     num_iterations=100
+            # )
             
-            v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt.to(device), v_gt_norm)
-            w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt.to(device), w_gt)
-            v_mag_error = vector_math.vector_mag_error(v_opt.to(device), v_gt_norm)
-            w_mag_error = vector_math.vector_mag_error(w_opt.to(device), w_gt)
+            # v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt.to(device), v_gt_norm)
+            # w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt.to(device), w_gt)
+            # v_mag_error = vector_math.vector_mag_error(v_opt.to(device), v_gt_norm)
+            # w_mag_error = vector_math.vector_mag_error(w_opt.to(device), w_gt)
             
             # print(f"groundtruth_linear_velocity:{v_gt}, groundtruth_angular_velocity:{w_gt}")
             # print(f"initial_linear_velocity:{init_velc[0]}, intial_angular_velocity:{init_velc[1]}")
@@ -223,13 +241,12 @@ if __name__ == "__main__":
             # print(f"linear_velocity_angle_error:{v_mag_error}, angular_velocity_error:{w_mag_error}")
             
             # Motion loss
-            if i >= 299:
-                motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt_norm)
-            else:
-                motion_loss = torch.Tensor([0]).to(device)
+            # motion_loss = motion_criterion(w_opt.to(device), v_opt.to(device), w_gt, v_gt_norm)
+            # motion_loss = torch.Tensor([0]).to(device)
+            motion_loss = dec_loss
             
             # Total loss
-            alpha, beta, gamma = 1, 1, 1
+            alpha, beta, gamma = 1, 1, 10
             scaled_grad_loss =  alpha * grad_loss / 8.0
             scaled_var_loss = beta * var_loss / 31.0 
             scaled_motion_loss = gamma * motion_loss
@@ -239,10 +256,10 @@ if __name__ == "__main__":
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
             wandb_logger.write("motion_loss", scaled_motion_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
-            wandb_logger.write("v_dir_error", v_dir_error.item())
-            wandb_logger.write("w_dir_error", w_dir_error.item())
-            wandb_logger.write("v_mag_error", v_mag_error.item())
-            wandb_logger.write("w_mag_error", w_mag_error.item())
+            # wandb_logger.write("v_dir_error", v_dir_error.item())
+            # wandb_logger.write("w_dir_error", w_dir_error.item())
+            # wandb_logger.write("v_mag_error", v_mag_error.item())
+            # wandb_logger.write("w_mag_error", w_mag_error.item())
             
             # NN optimize
             total_loss.backward()
