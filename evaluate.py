@@ -18,7 +18,7 @@ from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.utils.visualizer import Visualizer
 from src.model.eventflow import DenseOpticalFlowCalc
-from src.dataset_loader import dataset_manager
+from src.loader import dataset_manager
 from src.utils.event_image_converter import EventImageConverter
 
 torch.set_float32_matmul_precision('high')

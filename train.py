@@ -19,7 +19,7 @@ from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp
 from src.model import geometric
 from src.utils.timer import TimeAnalyzer
-from src.dataset_loader import dataset_manager
+from src.loader import dataset_manager
 from src.model.eventflow import DenseOpticalFlowCalc
 from src.utils.event_image_converter import EventImageConverter
 
@@ -318,5 +318,3 @@ if __name__ == "__main__":
     dir_name = os.path.dirname(log_model_path) 
     os.makedirs(dir_name, exist_ok=True)
     torch.save(flow_field.state_dict(), log_model_path)
-
-
