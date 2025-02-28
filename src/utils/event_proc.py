@@ -8,6 +8,53 @@ import numpy as np
 from pathlib import Path
 from typing import Union, Dict, Tuple
 
+def crop_event(
+    events: torch.Tensor, 
+    x0: int, x1: int, 
+    y0: int, y1: int
+) -> torch.Tensor:
+    """Crop events.
+
+    Args:
+        events (Tensor): [n x 4]. [x, y, t, p].
+        x0 (int): Start of the crop, at row[0]
+        x1 (int): End of the crop, at row[0]
+        y0 (int): Start of the crop, at row[1]
+        y1 (int): End of the crop, at row[1]
+
+    Returns:
+        Tensor: Cropped events.
+    """
+    mask = (
+        (x0 <= events[:, 0]) & (events[:, 0] < x1) &
+        (y0 <= events[:, 1]) & (events[:, 1] < y1)
+    )
+
+    cropped = events[mask]
+    return cropped
+
+def undistort_events(events: torch.Tensor, map_x: torch.Tensor, map_y: torch.Tensor, h: int, w: int) -> torch.Tensor:
+    """Undistort (rectify) events.
+    Args:
+        events ... [x, y, t, p]. X is height direction.
+        map_x, map_y... meshgrid
+
+    Returns:
+        events... events that is in the camera plane after undistortion.
+    """
+    x_indices = events[:, 0].long()  
+    y_indices = events[:, 1].long()  
+
+    k = map_y[x_indices, y_indices].long()  
+    l = map_x[x_indices, y_indices].long()  
+
+    undistort_events = events.clone()
+    undistort_events[:, 0] = k.float()  
+    undistort_events[:, 1] = l.float()  
+
+    mask = (0 <= k) & (k < h) & (0 <= l) & (l < w)
+    return undistort_events[mask]
+
 def normalized_plane_to_pixel(
     events: torch.Tensor,
     intrinsic_mat: torch.Tensor
