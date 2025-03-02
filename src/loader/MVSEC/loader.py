@@ -57,6 +57,36 @@ class MVSECDataLoader(DataLoaderBase):
     def __init__(self, config: dict = {}):
         super().__init__(config)
 
+    def get_events_for_train(self, t1=None, t2=None):
+        self.t1_train = self.min_ts
+        self.t2_train = self.max_ts
+        
+        if t1 is not None:
+            self.t1_train = t1
+        if t2 is not None:
+            self.t2_train = t2
+            
+        if self.t1_train >= self.t2_train:
+            logger.error(f"Invalid time: t1({self.t1_train}) >= t2({self.t2_train})")
+            raise ValueError(f"Invalid time: t1({self.t1_train}) >= t2({self.t2_train})")
+
+        ind1 = self.time_to_index(self.t1_train)  # event index
+        ind2 = self.time_to_index(self.t2_train)
+        events_for_train = self.load_event(ind1, ind2)
+        return events_for_train
+         
+    def get_events_for_valid(self, t1=10, t2=15):
+        self.t1_valid = self.min_ts + t1
+        self.t2_valid = self.min_ts + t2
+            
+        if self.t1_valid >= self.t2_valid:
+            logger.error(f"Invalid time: t1({self.t1_valid}) >= t2({self.t2_valid})")
+            raise ValueError(f"Invalid time: t1({self.t1_valid}) >= t2({self.t2_valid})")
+        ind1 = self.time_to_index(self.t1_valid)  # event index
+        ind2 = self.time_to_index(self.t2_valid)
+        events_for_valid = self.load_event(ind1, ind2)
+        return events_for_valid
+    
     # Override
     def set_sequence(self, sequence_name: str, undistort: bool = False) -> None:
         logger.info(f"Use sequence {sequence_name}")
@@ -198,7 +228,7 @@ class MVSECDataLoader(DataLoaderBase):
             events (np.ndarray) ... Events. [x, y, t, p] where x is height.
             t is absolute value, in sec. p is [-1, 1].
         """
-        n_events = end_index - start_index
+        n_events = end_index - start_index + 1
         events = np.zeros((n_events, 4), dtype=np.float64)
 
         if cam == "left":
@@ -207,10 +237,10 @@ class MVSECDataLoader(DataLoaderBase):
                     f"Specified {start_index} to {end_index} index for {len(self.left_event)}."
                 )
                 raise IndexError
-            events[:, 0] = self.left_event[start_index:end_index, 1]
-            events[:, 1] = self.left_event[start_index:end_index, 0]
-            events[:, 2] = self.left_ts[start_index:end_index]
-            events[:, 3] = self.left_event[start_index:end_index, 3]
+            events[:, 0] = self.left_event[start_index:end_index+1, 1]
+            events[:, 1] = self.left_event[start_index:end_index+1, 0]
+            events[:, 2] = self.left_ts[start_index:end_index+1]
+            events[:, 3] = self.left_event[start_index:end_index+1, 3]
         elif cam == "right":
             logger.error("Please select `left`as `cam` parameter.")
             raise NotImplementedError
@@ -232,12 +262,16 @@ class MVSECDataLoader(DataLoaderBase):
         return self.left_ts[index]
 
     def time_to_index(self, time: float) -> int:
-        # inds = np.where(self.left_ts > time)[0]
-        # if len(inds) == 0:
-        #     return len(self.left_ts) - 1
-        # return inds[0] - 1
+        if time < self.left_ts.min() or time > self.left_ts.max():
+            logger.error("The time is out of range.")
+            raise ValueError("The time is out of range.")
+        
         ind = np.searchsorted(self.left_ts, time)
-        return ind - 1
+        
+        if ind < len(self.left_ts) and self.left_ts[ind] == time:
+            return ind 
+        else:
+            return ind - 1  
 
     def get_gt_time(self, index: int) -> tuple:
         """Get GT flow timestamp [floor, ceil] for a given index.
