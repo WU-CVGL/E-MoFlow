@@ -1,6 +1,6 @@
 import os
 import cv2
-import random
+import torch
 import logging
 import numpy as np
 
@@ -176,8 +176,12 @@ class Visualizer:
         Returns:
             _type_: _description_
         """
-        im = self.imager.create_image_from_events_numpy(events, method="bilinear_vote", sigma=0)
-        clipped_iwe = 255 - np.clip(max_scale * im, 0, 255).astype(np.uint8)
+        # im = self.imager.create_image_from_events_numpy(events, method="bilinear_vote", sigma=0)
+
+        im = self.imager.create_iwes(events, method="bilinear_vote", sigma=0)
+        if isinstance(im, torch.Tensor):
+            im = im.detach().cpu().numpy()
+        clipped_iwe = np.clip(max_scale * im, 0, 255).astype(np.uint8)
         return clipped_iwe
 
     # Optical flow
