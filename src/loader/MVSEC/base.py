@@ -17,21 +17,23 @@ class DataLoaderBase(object):
     NAME = "example"
 
     def __init__(self, config: dict = {}):
-        self._HEIGHT = config["height"]
+        self._HEIGHT = config["hight"]
         self._WIDTH = config["width"]
 
-        root_dir: str = config["root"] 
+        self.dataset_name = config["dataset_name"]
+        root_dir: str = config["data_path"] 
         self.root_dir: str = os.path.expanduser(root_dir)
-        data_dir: str = config["dataset"] if config["dataset"] else self.NAME
-
-        self.dataset_dir: str = os.path.join(self.root_dir, data_dir)
+        self.dataset_dir: str = os.path.join(self.root_dir, config["sequence"][:-1])
+        logger.info(f"Loading data in {self.dataset_dir}")
+        
         self.__dataset_files: dict = {}
-        logger.info(f"Loading directory in {self.dataset_dir}")
-
+        
         self.gt_flow_available: bool
         if misc.check_key_and_bool(config, "load_gt_flow"):
-            self.gt_flow_dir: str = os.path.expanduser(config["gt"])
+            gt_flow_dir: str = os.path.expanduser(config["gt_path"])
+            self.gt_flow_dir: str = os.path.join(gt_flow_dir, config["sequence"][:-1])
             self.gt_flow_available = misc.check_file_utils(self.gt_flow_dir)
+            logger.info(f"Loading ground truth in {self.gt_flow_dir}")
         else:
             self.gt_flow_available = False
 

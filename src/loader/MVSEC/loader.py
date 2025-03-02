@@ -49,8 +49,7 @@ def get_timestamp_index(h5py_data):
     timestamp["left"] = np.array(h5py_data["davis"]["left"]["events"][:, 2])
     return timestamp
 
-
-class MvsecDataLoader(DataLoaderBase):
+class MVSECDataLoader(DataLoaderBase):
     """Dataloader class for MVSEC dataset."""
 
     NAME = "MVSEC"
@@ -69,11 +68,15 @@ class MvsecDataLoader(DataLoaderBase):
         self.left_event = l_event["event"]  # int16 .. for smaller memory consumption.
         self.left_ts = ts["left"]  # float64
         self.left_gray_ts = l_event["gray_ts"]  # float64
+        
+        logger.info(f"Loading {len(self.left_ts)} events from {sequence_name} in total")
+        logger.info(f"{sequence_name} comprises {len(self.left_gray_ts)} images in total")
+
         # self.right_event = r_event["event"]
         # self.right_ts = ts["right"]
         # self.right_gray_ts = r_event["gray_ts"]  # float64
 
-        # Setup gt
+        # Setup gt and filter
         if self.gt_flow_available:
             self.setup_gt_flow(os.path.join(self.gt_flow_dir, sequence_name))
             self.omit_invalid_data(sequence_name)
@@ -86,12 +89,15 @@ class MvsecDataLoader(DataLoaderBase):
             )
 
         # Setting up time suration statistics
+        self.min_gray_ts = self.left_gray_ts.min()
+        self.max_gray_ts = self.left_gray_ts.max()
         self.min_ts = self.left_ts.min()
         self.max_ts = self.left_ts.max()
         # self.min_ts = np.max([self.left_ts.min(), self.right_ts.min()])
         # self.max_ts = np.min([self.left_ts.max(), self.right_ts.max()]) - 10.0  # not use last 1 sec
         self.data_duration = self.max_ts - self.min_ts
-
+        logger.info(f"The time length of {sequence_name} is {self.data_duration}s")
+        
     def get_sequence(self, sequence_name: str) -> dict:
         """Get data inside a sequence.
 
@@ -101,10 +107,14 @@ class MvsecDataLoader(DataLoaderBase):
         Returns:
             sequence_file (dict) ... dictionary of the filenames for the sequence.
         """
-        data_path: str = os.path.join(self.root_dir, sequence_name)
+        data_path: str = os.path.join(self.dataset_dir, sequence_name)
         event_file = data_path + "_data.hdf5"
-        calib_file_x = data_path[:-1] + "_left_x_map.txt"
-        calib_file_y = data_path[:-1] + "_left_y_map.txt"
+        
+        self.calib_dir: str = os.path.join(self.dataset_dir, sequence_name[:-1] + "_calib")
+        calib_path: str = os.path.join(self.calib_dir, sequence_name[:-1])
+        calib_file_x = calib_path + "_left_x_map.txt"
+        calib_file_y = calib_path + "_left_y_map.txt"
+        
         sequence_file = {
             "event": event_file,
             "calib_map_x": calib_file_x,
@@ -114,11 +124,12 @@ class MvsecDataLoader(DataLoaderBase):
 
     def setup_gt_flow(self, path):
         path = path + "_gt_flow_dist.npz"
-        logger.info(f"Loading ground truth flow {path}")
         gt = np.load(path)
         self.gt_timestamps = gt["timestamps"]
         self.U_gt_all = gt["x_flow_dist"]
         self.V_gt_all = gt["y_flow_dist"]
+        logger.info(f"Loading ground truth flow {path}")
+        logger.info(f"{self.sequence_name} provides GT flow at {len(self.gt_timestamps)} timestamps")
 
     def free_up_flow(self):
         del self.gt_timestamps, self.U_gt_all, self.V_gt_all
@@ -163,6 +174,10 @@ class MvsecDataLoader(DataLoaderBase):
             (self.gt_timestamps[0] < self.left_gray_ts)
             & (self.gt_timestamps[-1] > self.left_gray_ts)
         ]
+        
+        logger.info(f"Filter and obtain {len(self.left_ts)} valid events.")
+        logger.info(f"Filter and obtain {len(self.left_gray_ts)} valid images.")
+        logger.info(f"Filter and obtain {len(self.gt_timestamps)} valid ground truth flow.")
 
         # self.right_event = self.right_event[first_event_index:last_event_index]
         # self.right_ts = self.right_ts[first_event_index:last_event_index]
