@@ -1,11 +1,14 @@
 import os
 import torch
 import random
+import logging
 import numpy as np
 import imageio.v2 as imageio
 
 from pathlib import Path
 from typing import List, Union
+
+logger = logging.getLogger(__name__)
 
 def load_optical_flow(flow_path):
     """Load optical flow map and return the horizontal and vertical component tensors"""
@@ -112,3 +115,32 @@ def get_filenames(file_list: List[str], indices: Union[List[int], int]) -> List[
             raise ValueError("Indices must be either a single integer or a list of two integers [start, end]")
     except IndexError as e:
         raise IndexError(f"Index out of range. List length is {len(file_list)}")
+    
+def check_file_utils(filename: str) -> bool:
+    """Return True if the file exists.
+
+    Args:
+        filename (str): _description_
+
+    Returns:
+        bool: _description_
+    """
+    logger.debug(f"Check {filename}")
+    res = os.path.exists(filename)
+    if not res:
+        logger.warning(f"{filename} does not exist!")
+    return res
+
+
+def check_key_and_bool(config: dict, key: str) -> bool:
+    """Check the existance of the key and if it's True
+
+    Args:
+        config (dict): dict.
+        key (str): Key name to be checked.
+
+    Returns:
+        bool: Return True only if the key exists in the dict and its value is True.
+            Otherwise returns False.
+    """
+    return key in config.keys() and config[key]
