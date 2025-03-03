@@ -33,7 +33,7 @@ def crop_event(
     cropped = events[mask]
     return cropped
 
-def undistort_events(events: torch.Tensor, map_x: torch.Tensor, map_y: torch.Tensor, h: int, w: int) -> torch.Tensor:
+def undistort_events(events, map_x, map_y, h, w):
     """Undistort (rectify) events.
     Args:
         events ... [x, y, t, p]. X is height direction.
@@ -41,19 +41,23 @@ def undistort_events(events: torch.Tensor, map_x: torch.Tensor, map_y: torch.Ten
 
     Returns:
         events... events that is in the camera plane after undistortion.
+    TODO check overflow
     """
-    x_indices = events[:, 0].long()  
-    y_indices = events[:, 1].long()  
+    # k = np.int32(map_y[np.int16(events[:, 1]), np.int16(events[:, 0])])
+    # l = np.int32(map_x[np.int16(events[:, 1]), np.int16(events[:, 0])])
+    # k = np.int32(map_y[events[:, 1].astype(np.int32), events[:, 0].astype(np.int32)])
+    # l = np.int32(map_x[events[:, 1].astype(np.int32), events[:, 0].astype(np.int32)])
+    # undistort_events = np.copy(events)
+    # undistort_events[:, 0] = l
+    # undistort_events[:, 1] = k
+    # return undistort_events[((0 <= k) & (k < h)) & ((0 <= l) & (l < w))]
 
-    k = map_y[x_indices, y_indices].long()  
-    l = map_x[x_indices, y_indices].long()  
-
-    undistort_events = events.clone()
-    undistort_events[:, 0] = k.float()  
-    undistort_events[:, 1] = l.float()  
-
-    mask = (0 <= k) & (k < h) & (0 <= l) & (l < w)
-    return undistort_events[mask]
+    k = np.int32(map_y[events[:, 0].astype(np.int32), events[:, 1].astype(np.int32)])
+    l = np.int32(map_x[events[:, 0].astype(np.int32), events[:, 1].astype(np.int32)])
+    undistort_events = np.copy(events)
+    undistort_events[:, 0] = k
+    undistort_events[:, 1] = l
+    return undistort_events[((0 <= k) & (k < h)) & ((0 <= l) & (l < w))]
 
 def normalized_plane_to_pixel(
     events: torch.Tensor,
