@@ -181,7 +181,7 @@ class Visualizer:
         im = self.imager.create_iwes(events, method="bilinear_vote", sigma=0)
         if isinstance(im, torch.Tensor):
             im = im.detach().cpu().numpy()
-        clipped_iwe = np.clip(max_scale * im, 0, 255).astype(np.uint8)
+        clipped_iwe = 255 - np.clip(max_scale * im, 0, 255).astype(np.uint8)
         return clipped_iwe
 
     # Optical flow
