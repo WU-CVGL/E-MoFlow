@@ -1,0 +1,42 @@
+data:
+  dataset_name: "MVSEC"
+  data_path: "/run/determined/workdir/data/MVSEC/hdf5"
+  load_gt_flow: True
+  gt_path: "/run/determined/workdir/data/MVSEC/flow_gt"
+  sequence: "indoor_flying1"
+  hight: 260
+  width: 346
+  window_size_ratio: 0.02  # 每个batch覆盖2%的总时间
+  step_size_ratio: 0.01   # 每次移动1%，相邻窗口有50%重叠
+  # sequence_indices: [0,99]
+  # batch_range: 15
+  loader:
+    num_workers: 16
+    batch_size: 32
+    shuffle: True
+    pin_memory: True
+
+logger:
+  project: mvsec_indoor_flying_1
+  expname: train_based_CMax_norm_pixel_idx_1402
+  results_dir: ./outputs/${project}/${expname}
+  model_weight_path: ./weights/${project}_${expname}.pth
+
+model:
+  pos_encode: False
+  multires: 2
+
+optimizer:
+  initial_lrate: 1.0e-4
+  final_lrate: 1.0e-6
+  num_epoch: 1000
+
+warp:
+  num_step: 3
+  tref_setting: "random"
+  solver: "euler"
+  # rtol: 1.0e-3
+  # atol: 1.0e-4
+
+valid: 
+  file_idx: [0,99]

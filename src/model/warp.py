@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class NeuralODEWarp:
     def __init__(self, flow_inr: EventFlowINR, device: torch.device, 
                  tref_setting: str, num_step: int, solver: str) -> None:
-        self.flow_calculator = flow_inr       # calculate dy/dt
+        self.flow_field = flow_inr       # calculate dy/dt
         self.device = device
         self.num_step = num_step
         self.tref_setting = tref_setting
@@ -32,13 +32,13 @@ class NeuralODEWarp:
         t_min = torch.min(batch_txy[:, 0]) + EPS
         t_max = torch.max(batch_txy[:, 0]) - EPS
         t_mid = (t_max + t_min) / 2
-
+        
         if tref_setting == 'min':
-            return torch.clamp(t_min, min=0.0, max=1.0).unsqueeze(0)
+            return t_min.unsqueeze(0)
         elif tref_setting == 'max':
-            return torch.clamp(t_max, min=0.0, max=1.0).unsqueeze(0)
+            return t_max.unsqueeze(0)
         elif tref_setting == 'mid':
-            return torch.clamp(t_mid, min=0.0, max=1.0).unsqueeze(0)
+            return t_mid.unsqueeze(0)
         elif tref_setting == 'random':
             return t_min + (t_max - t_min) * torch.rand(1).to(self.device)  # Uniform sampling between t_min and t_max
         elif tref_setting == 'multi':
@@ -63,10 +63,10 @@ class NeuralODEWarp:
         t_step = ((t_ref - batch_t0) / self.num_step).transpose(0, 1)
         num_warp = t_step.shape[0]
         warped_batch_txy = batch_txy.unsqueeze(0).repeat(num_warp, 1, 1)  # [1, n, 3] or [m, n, 3]
-        
+
         def euler_step(current_state, dt):
             """Single Euler integration step."""
-            pred_flow = self.flow_calculator.forward(current_state)  # [1, n, 2] or [m, n, 2]
+            pred_flow = self.flow_field.forward(current_state)  # [1, n, 2] or [m, n, 2]
             new_state = current_state.clone()
             new_state[..., 1:] += pred_flow * dt.unsqueeze(-1)
             # new_state[..., 1:] += pred_flow * torch.sign(dt.unsqueeze(-1))
@@ -76,25 +76,25 @@ class NeuralODEWarp:
         def rk4_step(current_state, dt):
             """Single RK4 integration step."""
             # k1 = f(t, y)
-            k1 = self.flow_calculator.forward(current_state)
+            k1 = self.flow_field.forward(current_state)
             
             # k2 = f(t + dt/2, y + dt*k1/2)
             k1_state = current_state.clone()
             k1_state[..., 1:] += (k1 * dt.unsqueeze(-1)) / 2
             k1_state[..., 0] += dt.squeeze() / 2
-            k2 = self.flow_calculator.forward(k1_state)
+            k2 = self.flow_field.forward(k1_state)
             
             # k3 = f(t + dt/2, y + dt*k2/2)
             k2_state = current_state.clone()
             k2_state[..., 1:] += (k2 * dt.unsqueeze(-1)) / 2
             k2_state[..., 0] += dt.squeeze() / 2
-            k3 = self.flow_calculator.forward(k2_state)
+            k3 = self.flow_field.forward(k2_state)
             
             # k4 = f(t + dt, y + dt*k3)
             k3_state = current_state.clone()
             k3_state[..., 1:] += k3 * dt.unsqueeze(-1)
             k3_state[..., 0] += dt.squeeze()
-            k4 = self.flow_calculator.forward(k3_state)
+            k4 = self.flow_field.forward(k3_state)
             
             # y(t + dt) = y(t) + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
             new_state = current_state.clone()
@@ -109,13 +109,13 @@ class NeuralODEWarp:
         # Integration loop
         for _ in range(self.num_step):
             warped_batch_txy = step_function(warped_batch_txy, t_step)
-        
+        # print(f"After warp: {warped_batch_txy[0,10000]}")
         return warped_batch_txy
 
 # class ODEFunc(nn.Module):
-#     def __init__(self, flow_calculator: EventFlowINR):
+#     def __init__(self, flow_field: EventFlowINR):
 #         super().__init__()
-#         self.flow_calculator = flow_calculator
+#         self.flow_field = flow_field
         
 #     def forward(self, t_norm: torch.Tensor, augmented_state: torch.Tensor):
 #         x = augmented_state[..., 0]
@@ -131,7 +131,7 @@ class NeuralODEWarp:
 #             y
 #         ], dim=-1)
         
-#         flow = self.flow_calculator(input_coords)
+#         flow = self.flow_field(input_coords)
         
 #         dxdt_norm = flow[..., 0] * delta_t
 #         dydt_norm = flow[..., 1] * delta_t
@@ -152,7 +152,7 @@ class NeuralODEWarp:
 #                  atol: float = 1e-9) -> None:
 #         super().__init__()
 #         self.ode_func = ODEFunc(flow_inr)  
-#         self.flow_calculator = flow_inr
+#         self.flow_field = flow_inr
 #         self.device = device
 #         self.tref_setting = tref_setting
 #         self.solver = solver
