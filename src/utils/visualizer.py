@@ -435,8 +435,8 @@ class Visualizer:
     ):
         """Color optical flow.
         Args:
-            flow_x (numpy.ndarray) ... [H x W], horizontal direction.
-            flow_y (numpy.ndarray) ... [H x W], vertical direction.
+            flow_x (numpy.ndarray) ... [H x W], height direction.
+            flow_y (numpy.ndarray) ... [H x W], width direction.
             max_magnitude (float, optional) ... Max magnitude used for the colorization. Defaults to None.
             ord (float) ... 1: our usual, 0.5: DSEC colorinzing.
 
@@ -445,30 +445,33 @@ class Visualizer:
             color_wheel (np.ndarray) ... [H, H] color wheel
             max_magnitude (float) ... max magnitude of the flow.
         """
-        flows = np.stack((flow_y, flow_x), axis=2)
+        flows = np.stack((flow_x, flow_y), axis=2)
         flows[np.isinf(flows)] = 0
         flows[np.isnan(flows)] = 0
         mag = np.linalg.norm(flows, axis=2) ** ord
-        ang = (np.arctan2(flow_x, flow_y) + np.pi) * 180.0 / np.pi / 2.0
+        ang = (np.arctan2(flow_y, flow_x) + np.pi) * 180.0 / np.pi / 2.0
         ang = ang.astype(np.uint8)
-        hsv = np.zeros([flow_y.shape[0], flow_y.shape[1], 3], dtype=np.uint8)
+        hsv = np.zeros([flow_x.shape[0], flow_x.shape[1], 3], dtype=np.uint8)
         hsv[:, :, 0] = ang
         hsv[:, :, 1] = 255
         if max_magnitude is None:
             max_magnitude = mag.max()
         hsv[:, :, 2] = (255 * mag / (max_magnitude + 1e-6)).astype(np.uint8)
+        # hsv[:, :, 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
         flow_rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
         # Color wheel
-        hsv = np.zeros([flow_y.shape[0], flow_y.shape[0], 3], dtype=np.uint8)
+        hsv = np.zeros([flow_x.shape[0], flow_x.shape[0], 3], dtype=np.uint8)
         xx, yy = np.meshgrid(
-            np.linspace(-1, 1, flow_y.shape[0]), np.linspace(-1, 1, flow_y.shape[0])
+            np.linspace(-1, 1, flow_x.shape[0]), np.linspace(-1, 1, flow_x.shape[0])
         )
         mag = np.linalg.norm(np.stack((xx, yy), axis=2), axis=2)
+        # ang = (np.arctan2(yy, xx) + np.pi) * 180 / np.pi / 2.0
         ang = (np.arctan2(xx, yy) + np.pi) * 180 / np.pi / 2.0
         hsv[:, :, 0] = ang.astype(np.uint8)
         hsv[:, :, 1] = 255
         hsv[:, :, 2] = (255 * mag / mag.max()).astype(np.uint8)
+        # hsv[:, :, 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
         color_wheel = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
         return flow_rgb, color_wheel, max_magnitude
@@ -603,3 +606,40 @@ class Visualizer:
         if self._show:
             plt.show(block=False)
         plt.close()
+        
+    def visualize_gt_sequential(
+        self, events: np.ndarray, gt_warp: np.ndarray, gt_type: str = "flow"
+    ):
+        """Visualize sequential, GT
+        Args:
+            events (np.ndarray): [description]
+            gt_warp (np.ndarray): if flow, [H, W, 2]; otherwise [n-dim]
+        """
+        if self.visualizer is None:
+            return
+        if gt_type == "flow":
+            motion_model = "dense-flow"
+            gt_warp = np.transpose(gt_warp, (2, 0, 1))  # [2, H, W]
+        else:
+            motion_model = self.motion_model
+
+        # events, _ = self.warper.warp_event(events, gt_warp, motion_model, direction="middle") # for ECCV secret paper
+        events, feat = self.warper.warp_event(
+            events, gt_warp, motion_model, direction="first"
+        )  # for collapse paper
+        clipped_iwe = self.create_clipped_iwe_for_visualization(
+            events, max_scale=self.iwe_visualize_max_scale
+        )
+        self.visualizer.visualize_image(clipped_iwe, file_prefix="gt_warp")  # type: ignore
+
+        # Flow
+        if motion_model != "dense-flow":
+            gt_flow = self.motion_to_dense_flow(gt_warp)
+        else:
+            gt_flow = gt_warp
+        self.visualizer.visualize_optical_flow(
+            gt_flow[0],
+            gt_flow[1],
+            visualize_color_wheel=False,
+            file_prefix="gt_flow",
+        )
