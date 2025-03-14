@@ -7,7 +7,7 @@ from typing import List
 from src.model import embedder
 
 class EventFlowINR(nn.Module):
-    def __init__(self, config, D=12, W=256, input_ch=3, output_ch=2, skips=[2]):
+    def __init__(self, config, D=2, W=256, input_ch=3, output_ch=2, skips=[]):
         super().__init__()
         self.config = config
         self.D = D
@@ -15,7 +15,7 @@ class EventFlowINR(nn.Module):
         self.input_ch = input_ch
         self.output_ch = output_ch
         self.skips = skips
-        # self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
+        # self.leaky_relu = nn.LeakyReLU(negative_slope=0.01)
 
         # network
         self.coord_linears = nn.ModuleList(
@@ -23,12 +23,6 @@ class EventFlowINR(nn.Module):
                                         range(D - 1)])
 
         self.output_linear = nn.Linear(W, output_ch)
-
-        for linear in self.coord_linears:
-            nn.init.xavier_uniform_(linear.weight)
-            nn.init.zeros_(linear.bias)
-        nn.init.xavier_uniform_(self.output_linear.weight)
-        nn.init.zeros_(self.output_linear.bias)
 
     def forward(self, coord_txy: torch.Tensor):
         # create positional encoding
