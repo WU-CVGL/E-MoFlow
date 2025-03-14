@@ -264,7 +264,7 @@ class EventImageConverter(object):
             ],
             axis=-1,
         )
-        vals = torch.ones_like(inds)
+        vals = torch.ones_like(inds, dtype=image.dtype)
         inds = (inds * inds_mask).long()
         vals = vals * inds_mask
         image.scatter_add_(1, inds, vals)
