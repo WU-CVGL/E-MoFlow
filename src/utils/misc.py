@@ -33,7 +33,7 @@ def save_flow(file_path: Path, flow: np.ndarray):
     flow_16bit[..., 2] = 1
     imageio.imwrite(str(file_path), flow_16bit, format='PNG-FI')
 
-def fix_random_seed(seed_idx=666) -> None:
+def fix_random_seed(seed_idx=42) -> None:
     random.seed(seed_idx)
     np.random.seed(seed_idx)
     torch.manual_seed(seed_idx)
