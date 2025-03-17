@@ -15,6 +15,7 @@ from src.loss.motion import MotionLoss
 from src.utils import misc
 from src.utils import pose
 from src.utils import event_proc
+from src.utils import metric
 from src.utils import vector_math
 from src.utils import load_config
 from src.model.eventflow import EventFlowINR
@@ -60,8 +61,9 @@ def run_train_phase(
 ):  
     # Split events stream to extract data for validation
     eval_frame_timestamp_list = dataset.eval_frame_time_list()
-    eval_dt_list = [8]
+    eval_dt_list = [4]
     total_batch_events = []
+    total_gt_flow = []
     for eval_dt in tqdm(eval_dt_list, desc=f"Split the events into batches for validation", leave=True):
         for i1 in tqdm(
             range(len(eval_frame_timestamp_list) - eval_dt), 
@@ -69,7 +71,8 @@ def run_train_phase(
         ):  
             t1 = eval_frame_timestamp_list[i1]
             t2 = eval_frame_timestamp_list[i1 + eval_dt]
-
+            
+            gt_flow = dataset.load_optical_flow(t1, t2)
             ind1 = dataset.time_to_index(t1)  # event index
             ind2 = dataset.time_to_index(t2)
             batch_events = dataset.load_event(ind1, ind2)
@@ -77,18 +80,37 @@ def run_train_phase(
             # batch_events[...,2] = (batch_events[...,2] - min(batch_events[...,2])) / (max(batch_events[...,2]) - min(batch_events[...,2]))
             # batch_events[...,2] = (batch_events[...,2] - dataset.min_ts) / dataset.data_duration
             total_batch_events.append(batch_events)
+            total_gt_flow.append(gt_flow)
 
+    epe = []
+    ae = []
+    out = []
+    
     for i in tqdm(range(len(total_batch_events))):
         valid_events_origin = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
         valid_origin_iwe = viz.create_clipped_iwe_for_visualization(valid_events_origin)
         viz.visualize_image(valid_origin_iwe.squeeze(0), file_prefix="origin_iwe_" + str(i))
         
+        gt_flow = total_gt_flow[i]
+        gt_flow = np.transpose(gt_flow, (2, 0, 1))  # [2, H, W]
+        viz.visualize_optical_flow(
+            gt_flow[0],
+            gt_flow[1],
+            visualize_color_wheel=True,
+            file_prefix="gt_flow" + str(i),
+        )
+
         # reset model
         misc.fix_random_seed()
         flow_field = EventFlowINR(model_config).to(device)
         # flow_field.to(torch.float64)
         warpper = NeuralODEWarp(flow_field, device, **warp_config)
         optimizer = optim.Adam(flow_field.parameters(), lr=optimizer_config["initial_lrate"])
+        
+        K_tensor = torch.Tensor(
+            [[226.38018519795807, 0, 173.6470807871759],
+             [0, 226.15002947047415, 133.73271487507847],
+             [0, 0, 1]]).to(device)
         
         # decay lr
         decay_steps = 1
@@ -130,7 +152,7 @@ def run_train_phase(
             iwes = imager.create_iwes(
                 events=warped_events,
                 method="bilinear_vote",
-                sigma=3,
+                sigma=1,
                 blur=True
             ) # [n,h,w] n can be one or multi
             
@@ -165,13 +187,6 @@ def run_train_phase(
             # update lr
             for param_group in optimizer.param_groups:
                 param_group['lr'] *= decay_factor
-            # if j==0:
-            #     print(f"Segment {i}, decay on step LR: {param_group['lr']}")
-            wandb_logger.write(f"learing_rate_{i}", param_group['lr'])
-            wandb_logger.update_buffer()
-            # tqdm.write(
-            #     f"[LOG] Epoch {iter} Total Loss: {total_loss}, Var Loss: {scaled_var_loss}, Grad Loss: {scaled_grad_loss}"
-            # )  
             iter+=1  
 
         # valid
@@ -194,9 +209,43 @@ def run_train_phase(
             # log
             valid_warped_iwe = viz.create_clipped_iwe_for_visualization(warped_valid_events)
             viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_"+ str(i))
+            
+            flow_calculator = DenseOpticalFlowCalc(
+                grid_size=image_size, 
+                intrinsic_mat = K_tensor,
+                model=warpper.flow_field, 
+                normalize_coords_mode="None", 
+                device=device
+            )
+            eval_t = eval_frame_timestamp_list[i] - dataset.min_gray_ts
+            eval_dt = eval_frame_timestamp_list[i + 4] - eval_frame_timestamp_list[i]
+            U, V, _, _ = flow_calculator.extract_flow_from_inr(eval_t + 0.5 * eval_dt, 1)
+            flow = torch.stack((V, U), dim=2).permute(2, 0, 1)
+            flow = flow.cpu().numpy() * eval_dt
+            # flow = flow.cpu().numpy() 
+            viz.visualize_optical_flow_on_event_mask(flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
+            
+            pred_flow = torch.from_numpy(flow).unsqueeze(0).to(device)
+            gt_flow = torch.from_numpy(gt_flow).unsqueeze(0).to(device)
+            event_mask = imager.create_eventmask(valid_events_origin).to(device)
+            flow_error, _ = metric.calculate_flow_error(gt_flow, pred_flow, event_mask=event_mask)  # type: ignore
+            
+            epe.append(flow_error["EPE"].item())
+            ae.append(flow_error["AE"].item())
+            out.append(flow_error["3PE"].item())
+            wandb_logger.write("EPE", flow_error["EPE"].item())
+            wandb_logger.write("AE", flow_error["AE"].item())
+            wandb_logger.write("1PE", flow_error["1PE"].item())
+            wandb_logger.write("2PE", flow_error["2PE"].item())
+            wandb_logger.write("3PE", flow_error["3PE"].item())
+            wandb_logger.update_buffer()
+          
         time_analyzer.end_valid()
         time_analyzer.end_epoch()
-            
+    
+    logger.info(f"Average EPE: {np.mean(epe)}")
+    logger.info(f"Average AE: {np.mean(ae)}")
+    logger.info(f"Average 3PE: {np.mean(out)}")
     stats = time_analyzer.get_statistics()
     return warpper.flow_field, stats
 
