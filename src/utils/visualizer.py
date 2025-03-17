@@ -216,7 +216,7 @@ class Visualizer:
 
         if visualize_color_wheel:
             self._show_or_save_image(wheel, fixed_file_name="color_wheel")
-        return image, wheel
+        return image
 
     # Combined with events
     def visualize_overlay_optical_flow_on_event(
@@ -291,6 +291,7 @@ class Visualizer:
         white = Image.new("RGB", image.size, (255, 255, 255))
         masked_flow = Image.composite(white, image, mask)
         self._show, self._save = _show, _save
+        # self._show_or_save_image(mask, file_prefix)
         self._show_or_save_image(masked_flow, file_prefix)
         return masked_flow
     
@@ -607,39 +608,3 @@ class Visualizer:
             plt.show(block=False)
         plt.close()
         
-    def visualize_gt_sequential(
-        self, events: np.ndarray, gt_warp: np.ndarray, gt_type: str = "flow"
-    ):
-        """Visualize sequential, GT
-        Args:
-            events (np.ndarray): [description]
-            gt_warp (np.ndarray): if flow, [H, W, 2]; otherwise [n-dim]
-        """
-        if self.visualizer is None:
-            return
-        if gt_type == "flow":
-            motion_model = "dense-flow"
-            gt_warp = np.transpose(gt_warp, (2, 0, 1))  # [2, H, W]
-        else:
-            motion_model = self.motion_model
-
-        # events, _ = self.warper.warp_event(events, gt_warp, motion_model, direction="middle") # for ECCV secret paper
-        events, feat = self.warper.warp_event(
-            events, gt_warp, motion_model, direction="first"
-        )  # for collapse paper
-        clipped_iwe = self.create_clipped_iwe_for_visualization(
-            events, max_scale=self.iwe_visualize_max_scale
-        )
-        self.visualizer.visualize_image(clipped_iwe, file_prefix="gt_warp")  # type: ignore
-
-        # Flow
-        if motion_model != "dense-flow":
-            gt_flow = self.motion_to_dense_flow(gt_warp)
-        else:
-            gt_flow = gt_warp
-        self.visualizer.visualize_optical_flow(
-            gt_flow[0],
-            gt_flow[1],
-            visualize_color_wheel=False,
-            file_prefix="gt_flow",
-        )
