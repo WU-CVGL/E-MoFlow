@@ -109,6 +109,7 @@ class MVSECDataLoader(DataLoaderBase):
         # Setup gt and filter
         if self.gt_flow_available:
             self.setup_gt_flow(os.path.join(self.gt_flow_dir, sequence_name))
+            self.setup_gt_motion(os.path.join(self.gt_flow_dir, sequence_name))
             self.omit_invalid_data(sequence_name)
 
         # Undistort - most likely necessary to run evaluation with GT.
@@ -160,6 +161,15 @@ class MVSECDataLoader(DataLoaderBase):
         self.V_gt_all = gt["y_flow_dist"]
         logger.info(f"Loading ground truth flow {path}")
         logger.info(f"{self.sequence_name} provides GT flow at {len(self.gt_timestamps)} timestamps")
+        
+    def setup_gt_motion(self, path):
+        path = path + "_odom.npz"
+        gt_motion = np.load(path)
+        self.gt_motion_timestamps = gt_motion["timestamps"]
+        self.lin_vel_gt_all = gt_motion["lin_vel"]
+        self.ang_vel_gt_all = gt_motion["ang_vel"]
+        logger.info(f"Loading ground truth motion {path}")
+        logger.info(f"{self.sequence_name} provides GT motion at {len(self.gt_motion_timestamps)} timestamps")
 
     def free_up_flow(self):
         del self.gt_timestamps, self.U_gt_all, self.V_gt_all
@@ -185,11 +195,14 @@ class MVSECDataLoader(DataLoaderBase):
         elif "outdoor_day2" in sequence_name:
             first_valid_gt_frame = 30
             # last_valid_gt_frame = 5020
-
+            
+        # print(np.array_equal(self.gt_timestamps, self.gt_motion_timestamps))
         self.gt_timestamps = self.gt_timestamps[first_valid_gt_frame:last_valid_gt_frame]
         self.U_gt_all = self.U_gt_all[first_valid_gt_frame:last_valid_gt_frame]
         self.V_gt_all = self.V_gt_all[first_valid_gt_frame:last_valid_gt_frame]
-
+        self.lin_vel_gt_all = self.lin_vel_gt_all[first_valid_gt_frame:last_valid_gt_frame]
+        self.ang_vel_gt_all = self.ang_vel_gt_all[first_valid_gt_frame:last_valid_gt_frame]
+        
         # Update event list
         first_event_index = self.time_to_index(self.gt_timestamps[0])
         last_event_index = self.time_to_index(self.gt_timestamps[-1])
@@ -204,10 +217,13 @@ class MVSECDataLoader(DataLoaderBase):
             (self.gt_timestamps[0] < self.left_gray_ts)
             & (self.gt_timestamps[-1] > self.left_gray_ts)
         ]
+        self.left_gray_ts_dt = np.diff(self.left_gray_ts)
         
         logger.info(f"Filter and obtain {len(self.left_ts)} valid events.")
         logger.info(f"Filter and obtain {len(self.left_gray_ts)} valid images.")
         logger.info(f"Filter and obtain {len(self.gt_timestamps)} valid ground truth flow.")
+        logger.info(f"Filter and obtain {len(self.gt_timestamps)} valid ground truth motion.")
+        logger.info(f"The average frame interval of grayscale images is {np.mean(self.left_gray_ts_dt)}.")
 
         # self.right_event = self.right_event[first_event_index:last_event_index]
         # self.right_ts = self.right_ts[first_event_index:last_event_index]
