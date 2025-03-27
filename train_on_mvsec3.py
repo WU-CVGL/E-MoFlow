@@ -6,6 +6,8 @@ import cv2 as cv2
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
+from torchdiffeq import odeint
+from torchdiffeq import odeint_adjoint
 
 from tqdm import tqdm
 from typing import Dict
@@ -20,7 +22,7 @@ from src.utils import vector_math
 from src.utils import load_config
 from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
-from src.model.warp import NeuralODEWarp
+from src.model.warp import NeuralODEWarp, NeuralODEWarpV2
 from src.model import geometric
 from src.utils.timer import TimeAnalyzer
 from src.loader import dataset_manager
@@ -31,6 +33,7 @@ from src.utils.visualizer import Visualizer
 from src.utils.vector_math import vector_to_skew_matrix
 from src.loader.MVSEC.loader import MVSECDataLoader
 from src.utils.filter import MedianPool2d
+
 
 # log
 logging.basicConfig(
@@ -62,6 +65,7 @@ def run_train_phase(
     # Split events stream to extract data for validation
     eval_frame_timestamp_list = dataset.eval_frame_time_list()
     eval_dt_list = [4]
+    gt_dt = 4
     total_batch_events = []
     total_gt_flow = []
     for eval_dt in tqdm(eval_dt_list, desc=f"Split the events into batches for validation", leave=True):
@@ -71,8 +75,10 @@ def run_train_phase(
         ):  
             t1 = eval_frame_timestamp_list[i1]
             t2 = eval_frame_timestamp_list[i1 + eval_dt]
+            gt_t1 = eval_frame_timestamp_list[i1]
+            gt_t2 = eval_frame_timestamp_list[i1 + gt_dt]
             
-            gt_flow = dataset.load_optical_flow(t1, t2)
+            gt_flow = dataset.load_optical_flow(gt_t1, gt_t2)
             ind1 = dataset.time_to_index(t1)  # event index
             ind2 = dataset.time_to_index(t2)
             batch_events = dataset.load_event(ind1, ind2)
@@ -104,8 +110,9 @@ def run_train_phase(
         misc.fix_random_seed()
         flow_field = EventFlowINR(model_config).to(device)
         # flow_field.to(torch.float64)
-        warpper = NeuralODEWarp(flow_field, device, **warp_config)
-        optimizer = optim.Adam(flow_field.parameters(), lr=optimizer_config["initial_lrate"])
+        # warpper = NeuralODEWarp(flow_field, device, **warp_config)
+        warpper = NeuralODEWarpV2(flow_field, device, **warp_config)
+        optimizer = optim.Adam(warpper.flow_field.parameters(), lr=optimizer_config["initial_lrate"])
         
         K_tensor = torch.Tensor(
             [[226.38018519795807, 0, 173.6470807871759],
@@ -118,19 +125,19 @@ def run_train_phase(
         final_lrate = config["optimizer"]["final_lrate"]
         initial_lrate = config["optimizer"]["initial_lrate"]
         decay_factor = (final_lrate / initial_lrate) ** (1 / (num_epochs / decay_steps))
-        print(f"learning rate decay factor:{decay_factor}")
-        initial_lr = optimizer.param_groups[0]['lr']
-        print(f"Segment {i}, Initial LR: {initial_lr}")
+        # print(f"learning rate decay factor:{decay_factor}")
+        # initial_lr = optimizer.param_groups[0]['lr']
+        print(f"Segment {i}")
         iter = 0
 
         # if(i!=1825):
         #     continue
-        for _ in tqdm(range(num_epochs)):
+        for j in tqdm(range(num_epochs)):
             time_analyzer.start_epoch()
             
             optimizer.zero_grad()
             
-            batch_events = valid_events_origin.detach().clone() # (y, x, t, p)
+            batch_events = valid_events_origin.clone() # (y, x, t, p)
             origin_iwe = imager.create_iwes(batch_events)
             batch_events = batch_events[..., [2, 1, 0, 3]]  # (t, x, y, p)
             batch_events_txy = batch_events[:, :3]
@@ -139,8 +146,8 @@ def run_train_phase(
             t_ref = warpper.get_reference_time(batch_events_txy, warp_config["tref_setting"])
 
             # warp by neural ode 
-            warped_events_txy = warpper.warp_events(batch_events_txy, t_ref, method=warp_config["solver"])
-            # warped_events_txy = warpper.warp_events(batch_events_txy, t_ref).unsqueeze(0)
+            # warped_events_txy = warpper.warp_events(batch_events_txy, t_ref, method=warp_config["solver"])
+            warped_events_txy = warpper.warp_events(batch_events_txy, t_ref).unsqueeze(0)
 
             # create image warped event    
             num_iwe, num_events = warped_events_txy.shape[0], warped_events_txy.shape[1]
@@ -149,6 +156,10 @@ def run_train_phase(
             warped_events = warped_events[...,[1,0,2,3]] # (x,y,t,p) ——> (y,x,t,p)
             
             # events should be reorganized as (y,x,t,p) that can processed by create_iwes
+            # if(j < 500):
+            #     blur_kernel_sigma = 3
+            # else:
+            #     blur_kernel_sigma = 1
             iwes = imager.create_iwes(
                 events=warped_events,
                 method="bilinear_vote",
@@ -192,13 +203,13 @@ def run_train_phase(
         # valid
         time_analyzer.start_valid()
         with torch.no_grad():
-            valid_events = valid_events_origin.detach().clone()
+            valid_events = valid_events_origin.clone()
             valid_events = valid_events[:, [2, 1, 0, 3]] # (y, x, t, p) ——> (t, x, y, p)
             valid_events_txy = valid_events[:, :3]
             
-            valid_ref = warpper.get_reference_time(valid_events_txy, "min")
-            warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref, method=warp_config["solver"])
-            # warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
+            valid_ref = warpper.get_reference_time(valid_events_txy, "max")
+            # warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref, method=warp_config["solver"])
+            warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
             
             # create image warped event 
             num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]       
@@ -217,15 +228,19 @@ def run_train_phase(
                 normalize_coords_mode="None", 
                 device=device
             )
-            eval_t = eval_frame_timestamp_list[i] - dataset.min_gray_ts
-            eval_dt = eval_frame_timestamp_list[i + 4] - eval_frame_timestamp_list[i]
-            U, V, _, _ = flow_calculator.extract_flow_from_inr(eval_t + 0.5 * eval_dt, 1)
-            flow = torch.stack((V, U), dim=2).permute(2, 0, 1)
-            flow = flow.cpu().numpy() * eval_dt
-            # flow = flow.cpu().numpy() 
-            viz.visualize_optical_flow_on_event_mask(flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
+            t_start = eval_frame_timestamp_list[i] - dataset.min_gray_ts
+            t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_gray_ts
+            duration  = t_end - t_start
             
-            pred_flow = torch.from_numpy(flow).unsqueeze(0).to(device)
+            # U, V, _, _ = flow_calculator.extract_flow_from_inr(t_start + 0.5 * duration, 1)
+            # pred_flow = torch.stack((V, U), dim=2).permute(2, 0, 1)
+            # pred_flow = pred_flow.cpu().numpy() * duration
+            pred_flow = flow_calculator.integrate_flow(t_start, t_end) # [H*W , 2]
+            pred_flow = pred_flow.cpu().numpy()
+            
+            viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
+            
+            pred_flow = torch.from_numpy(pred_flow).unsqueeze(0).to(device)
             gt_flow = torch.from_numpy(gt_flow).unsqueeze(0).to(device)
             event_mask = imager.create_eventmask(valid_events_origin).to(device)
             flow_error, _ = metric.calculate_flow_error(gt_flow, pred_flow, event_mask=event_mask)  # type: ignore
@@ -242,10 +257,11 @@ def run_train_phase(
           
         time_analyzer.end_valid()
         time_analyzer.end_epoch()
-    
+    error_dict = {"EPE": np.mean(epe), "AE": np.mean(ae), "3PE": np.mean(out)}
     logger.info(f"Average EPE: {np.mean(epe)}")
     logger.info(f"Average AE: {np.mean(ae)}")
     logger.info(f"Average 3PE: {np.mean(out)}")
+    misc.save_flow_error_as_text(error_dict, config["logger"]["results_dir"])
     stats = time_analyzer.get_statistics()
     return warpper.flow_field, stats
 
@@ -271,7 +287,10 @@ if __name__ == "__main__":
     # load dataset 
     dataloader_config = data_config.pop('loader')
     dataset = MVSECDataLoader(config=data_config)
-    dataset.set_sequence(data_config["sequence"])
+    dataset.set_sequence(data_config["sequence"], undistort=True)
+    
+    while(1):
+        pass
 
     # event2img converter
     image_size = (data_config["hight"], data_config["width"])
@@ -285,13 +304,6 @@ if __name__ == "__main__":
         save_dir=config["logger"]["results_dir"],
     )
     
-    # create model
-    # flow_field: EventFlowINR = EventFlowINR(model_config).to(device)
-    # warpper = NeuralODEWarp(flow_field, device, **warp_config)
-    
-    # # create NN optimizer
-    # optimizer = optim.Adam(flow_field.parameters(), lr=optimizer_config["initial_lrate"])
-    
     # instantiate criterion
     grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
     var_criterion = FocusLoss(loss_type="variance", norm="l1")
@@ -301,20 +313,10 @@ if __name__ == "__main__":
         "var_criterion": var_criterion,
         "motion_criterion": motion_criterion
     } 
-    
-    # display origin valid data
-    # valid_origin_iwe = viz.create_clipped_iwe_for_visualization(valid_events)
-    # wandb_logger.write_img("valid_iwe", valid_origin_iwe)
-    # wandb_logger.update_buffer()
 
     # time analysis
     time_analyzer = TimeAnalyzer()
 
-    # train
-    # trained_flow_field, time_stats = run_train_phase(
-    #     args, config, dataset, warpper, optimizer, criterions,
-    #     imager, viz, wandb_logger, time_analyzer, device
-    # )
     trained_flow_field, time_stats = run_train_phase(
         args, config, dataset, criterions,
         imager, viz, wandb_logger, time_analyzer, device

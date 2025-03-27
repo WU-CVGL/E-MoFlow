@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+from torchdiffeq import odeint
 
 from typing import List
 from src.model import embedder
@@ -46,7 +47,17 @@ class EventFlowINR(nn.Module):
         # outputs = torch.sigmoid(outputs)
         outputs = torch.reshape(outputs, list(coord_txy.shape[:-1]) + [outputs.shape[-1]])
         return outputs
-    
+class ForwardflowODEFunc(nn.Module):
+    def __init__(self, nn_model):
+        super(ForwardflowODEFunc, self).__init__()
+        self.nn_model = nn_model
+
+    def forward(self, t, state):
+        batch_size = state.shape[0]  # H*W
+        t_tensor = t * torch.ones(batch_size, 1).to(state.device)
+        inputs = torch.cat([t_tensor, state], dim=1)
+        uv = self.nn_model(inputs)
+        return uv
 class DenseOpticalFlowCalc:
     def __init__(
         self, 
@@ -78,32 +89,25 @@ class DenseOpticalFlowCalc:
         self.model = model
         self.device = device
         self.normalize_coords_mode = normalize_coords_mode
+        
+    def integrate_flow(self, t_start, t_end, num_steps=2):
+        odefunc = ForwardflowODEFunc(self.model)
+        
+        t = torch.linspace(t_start, t_end, num_steps).to(self.device)
+        initial_positions = torch.stack((self.x, self.y), dim=1)
 
-    # def extract_flow_from_inr(self, t, time_scale):
-    #     num_points = self.x.shape[0]
-    #     num_timesteps = t.shape[1]
-    #     x_batch = self.x.repeat(num_timesteps)
-    #     y_batch = self.y.repeat(num_timesteps)
-    #     t_batch = t.view(-1).repeat_interleave(num_points).to(self.device)
-    #     txy = torch.stack((t_batch, x_batch, y_batch), dim=1)
+        solution = odeint(odefunc, initial_positions, t)  # [num_steps, H*W, 2]
+        # print(solution[:,500])
+        final_positions = solution[-1]  # [H*W, 2]
+        displacement = final_positions - initial_positions  # [H*W, 2]
         
-    #     with torch.no_grad():
-    #         flow = self.model(txy)  # [num_points*num_timesteps, 2]
+        u, v = displacement[:, 0], displacement[:, 1]
+        U = u.view(self.H, self.W)
+        V = v.view(self.H, self.W)
+        pred_flow = torch.stack((V, U), dim=2).permute(2, 0, 1)
         
-    #     u = flow[:, 0].view(num_timesteps, num_points)
-    #     v = flow[:, 1].view(num_timesteps, num_points)
-    #     U_norm = u.view(num_timesteps, self.H, self.W)
-    #     V_norm = v.view(num_timesteps, self.H, self.W)
-        
-    #     if self.normalize_coords_mode == "UV_SPACE":
-    #         U, V = U_norm * (self.W - 1) * time_scale, V_norm * (self.H - 1) * time_scale
-    #     elif self.normalize_coords_mode == "NORM_PLANE":
-    #         fx, fy = self.K[0,0], self.K[1,1]
-    #         U, V = U_norm * fx * time_scale, V_norm * fy * time_scale
-    #     else:
-    #         U, V = U_norm * time_scale, V_norm * time_scale
-    #     return U, V, U_norm, V_norm
-    
+        return pred_flow
+
     def extract_flow_from_inr(self, t, time_scale):
         num_points = self.x.shape[0]
         t_batch = t * torch.ones(num_points, device=self.device).to(self.device)
