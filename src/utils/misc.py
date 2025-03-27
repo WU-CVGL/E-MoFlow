@@ -144,3 +144,10 @@ def check_key_and_bool(config: dict, key: str) -> bool:
             Otherwise returns False.
     """
     return key in config.keys() and config[key]
+
+def save_flow_error_as_text(
+    flow_error_dict: dict, dir: str, fname: str = "flow_error.txt"
+):
+    save_file_name = os.path.join(dir, fname)
+    with open(save_file_name, "a") as f:
+        f.write(str(flow_error_dict) + "\n")
