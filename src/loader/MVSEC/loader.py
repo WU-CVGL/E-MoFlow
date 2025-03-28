@@ -202,7 +202,7 @@ class MVSECDataLoader(DataLoaderBase):
         self.V_gt_all = self.V_gt_all[first_valid_gt_frame:last_valid_gt_frame]
         self.lin_vel_gt_all = self.lin_vel_gt_all[first_valid_gt_frame:last_valid_gt_frame]
         self.ang_vel_gt_all = self.ang_vel_gt_all[first_valid_gt_frame:last_valid_gt_frame]
-        
+
         # Update event list
         first_event_index = self.time_to_index(self.gt_timestamps[0])
         last_event_index = self.time_to_index(self.gt_timestamps[-1])
@@ -328,6 +328,12 @@ class MVSECDataLoader(DataLoaderBase):
         gt_flow = np.stack((V_gt, U_gt), axis=2)
         return gt_flow
 
+    def load_gt_motion(self):
+        timestamps_col = self.gt_timestamps.reshape(-1, 1) - self.min_ts
+        self.lin_vel_gt_all = np.hstack([timestamps_col, self.lin_vel_gt_all])  # shape (1280, 4)
+        self.ang_vel_gt_all = np.hstack([timestamps_col, self.ang_vel_gt_all])  # shape (1280, 4)
+        return self.lin_vel_gt_all, self.ang_vel_gt_all
+    
     def load_calib(self) -> dict:
         """Load calibration file.
 

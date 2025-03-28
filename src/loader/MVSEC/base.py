@@ -70,6 +70,9 @@ class DataLoaderBase(object):
 
     def load_optical_flow(self, t1: float, t2: float, *args, **kwargs) -> np.ndarray:
         raise NotImplementedError
+    
+    def load_gt_motion(self) -> np.ndarray:
+        raise NotImplementedError
 
     def index_to_time(self, index: int) -> float:
         raise NotImplementedError

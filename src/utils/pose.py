@@ -1,6 +1,13 @@
 import torch
-
 from typing import Tuple
+from torchcubicspline import natural_cubic_spline_coeffs, NaturalCubicSpline
+
+def create_vel_cspline(velocity :torch.Tensor):
+    t = velocity[:,0]
+    x = velocity[:,1:4]
+    coeffs = natural_cubic_spline_coeffs(t, x)
+    spline = NaturalCubicSpline(coeffs)
+    return spline
 
 def slerp(q1: torch.Tensor, q2: torch.Tensor, t: float) -> torch.Tensor:
     """Spherical Linear Interpolation between quaternions"""
