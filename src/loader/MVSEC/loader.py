@@ -112,6 +112,10 @@ class MVSECDataLoader(DataLoaderBase):
             self.setup_gt_motion(os.path.join(self.gt_flow_dir, sequence_name))
             self.omit_invalid_data(sequence_name)
 
+        # Calib param
+        self.intrinsic = self.load_calib(sequence_name)["K"]
+        self.distortion_coeffs = self.load_calib(sequence_name)["D"]
+        
         # Undistort - most likely necessary to run evaluation with GT.
         self.undistort = undistort
         if self.undistort:
@@ -334,25 +338,57 @@ class MVSECDataLoader(DataLoaderBase):
         self.ang_vel_gt_all = np.hstack([timestamps_col, self.ang_vel_gt_all])  # shape (1280, 4)
         return self.lin_vel_gt_all, self.ang_vel_gt_all
     
-    def load_calib(self) -> dict:
+    def load_calib(self, sequence_name) -> dict:
         """Load calibration file.
 
         Outputs:
             (dict) ... {"K": camera_matrix, "D": distortion_coeff}
                 camera_matrix (np.ndarray) ... [3 x 3] matrix.
-                distortion_coeff (np.array) ... [5] array.
+                distortion_coeff (np.array) ... [4] array.
         """
         logger.warning("directly load calib_param is not implemented!! please use rectify instead.")
-        outdoor_K = np.array(
-            [
-                [223.9940010790056, 0, 170.7684322973841, 0],
-                [0, 223.61783486959376, 128.18711828338436, 0],
-                [0, 0, 1, 0],
-                [0, 0, 0, 1],
-            ],
-            dtype=np.float32,
-        )
-        return {"K": outdoor_K}
+        intrinsics_mat, distortion_coeffs = [], []
+        
+        if(sequence_name[:-1] == "indoor_flying"):
+            intrinsics_mat = np.array(
+                [
+                    [226.0181418548734, 0, 174.5433576736815],
+                    [0, 225.7869434267677, 124.21627572590607],
+                    [0, 0, 1],
+                ],
+                dtype=np.float32,
+            )
+            distortion_coeffs = np.array(
+                [
+                    -0.04846669832871334,
+                    0.010092844338123635,
+                    -0.04293073765014637,
+                    0.005194706897326005,
+                ],
+                dtype=np.float32,
+            )
+        elif(sequence_name[:-1] == "outdoor_day"):
+            intrinsics_mat = np.array(
+                [
+                    [223.9940010790056, 0, 170.7684322973841],
+                    [0, 223.61783486959376, 128.18711828338436],
+                    [0, 0, 1],
+                ],
+                dtype=np.float32,
+            )
+            distortion_coeffs = np.array(
+                [
+                    -0.033904378348448685,
+                    -0.01537260902537579,
+                    -0.022284741346941413,
+                    0.0069204143687187645,
+                ],
+                dtype=np.float32,
+            )
+        else:
+            logger.error(f"{sequence_name} is not exist.")
+            raise ValueError
+        return {"K": intrinsics_mat, "D": distortion_coeffs}
 
     def get_calib_map(self, map_txt_x, map_txt_y):
         """Intrinsic calibration parameter file loader.
