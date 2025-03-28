@@ -113,8 +113,9 @@ class MVSECDataLoader(DataLoaderBase):
             self.omit_invalid_data(sequence_name)
 
         # Calib param
-        self.intrinsic = self.load_calib(sequence_name)["K"]
-        self.distortion_coeffs = self.load_calib(sequence_name)["D"]
+        calib_param = self.load_calib(sequence_name)
+        self.intrinsic = calib_param["K"]
+        self.distortion_coeffs = calib_param["D"]
         
         # Undistort - most likely necessary to run evaluation with GT.
         self.undistort = undistort
