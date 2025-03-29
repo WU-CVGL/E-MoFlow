@@ -96,7 +96,7 @@ class DenseOpticalFlowCalc:
         t = torch.linspace(t_start, t_end, num_steps).to(self.device)
         initial_positions = torch.stack((self.x, self.y), dim=1)
 
-        solution = odeint(odefunc, initial_positions, t)  # [num_steps, H*W, 2]
+        solution = odeint(odefunc, initial_positions, t, method="dopri5")  # [num_steps, H*W, 2]
         # print(solution[:,500])
         final_positions = solution[-1]  # [H*W, 2]
         displacement = final_positions - initial_positions  # [H*W, 2]
