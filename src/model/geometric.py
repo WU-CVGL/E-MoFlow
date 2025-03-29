@@ -6,9 +6,10 @@ from typing import Optional, Tuple, cast
 from src.utils.vector_math import vector_to_skew_matrix
 
 class Pixel2Cam:
-    def __init__(self, H: int, W: int, device: torch.device):
+    def __init__(self, H: int, W: int, K: torch.Tensor, device: torch.device):
         self.H = H
         self.W = W
+        self.K = K.to(device)
         self.device = device
         self.grid = kornia.utils.create_meshgrid(
             H, W, normalized_coordinates=False).to(device)
@@ -17,23 +18,34 @@ class Pixel2Cam:
         self.pixels_homogeneous = torch.cat(
             [self.grid, self.ones], dim=-1)  # [H,W,3]
         
-    def generate_normalized_coordinate(
+    def generate_image_coordinate(
+        self,
+    ) -> torch.Tensor:
+        if self.K.dim() == 2:
+            self.K = self.K.unsqueeze(0)
+        B = self.K.shape[0]
+        
+        pixels_batch = self.pixels_homogeneous.unsqueeze(0).expand(B, -1, -1, -1).to(self.device)
+
+        return pixels_batch
+        
+    def generate_normalized_image_coordinate(
         self, 
-        K: torch.Tensor, 
+        # K: torch.Tensor, 
         depth: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        if K.dim() == 2:
-            K = K.unsqueeze(0)
-        B = K.shape[0]
+        if self.K.dim() == 2:
+            self.K = self.K.unsqueeze(0)
+        B = self.K.shape[0]
         
-        pixels_batch = self.pixels_homogeneous.unsqueeze(0).expand(B, -1, -1, -1).to(K.device)
-        K_4x4 = torch.zeros(B, 4, 4, device=K.device)
-        K_4x4[:, :3, :3] = K
+        pixels_batch = self.pixels_homogeneous.unsqueeze(0).expand(B, -1, -1, -1).to(self.device)
+        K_4x4 = torch.zeros(B, 4, 4, device=self.K.device)
+        K_4x4[:, :3, :3] = self.K
         K_4x4[:, 3, 3] = 1.0
         K_4x4_inv = torch.inverse(K_4x4)
         
         if depth is None:
-            depth = torch.ones(B, 1, self.H, self.W, device=K.device)
+            depth = torch.ones(B, 1, self.H, self.W, device=self.K.device)
             
         return kornia.geometry.camera.pinhole.pixel2cam(
             depth, K_4x4_inv, pixels_batch)[..., :3]
@@ -81,9 +93,9 @@ class Pixel2Cam:
         mask: torch.Tensor, 
         n: int
     ) -> torch.Tensor:
-        assert coord_tensor.dim() == 4 and coord_tensor.shape[0] == 1, "坐标张量形状应为 [1, H, W, 3]"
+        assert coord_tensor.dim() == 4 and coord_tensor.shape[0] == 1, "The coordinate tensor shape should be [1, H, W, 3]."
         H, W = coord_tensor.shape[1], coord_tensor.shape[2]
-        assert mask.shape == (H, W), "掩码形状与坐标张量不匹配"
+        assert mask.shape == (H, W), "The mask shape does not match the coordinate tensor."
         
         valid_coords = coord_tensor[0][mask.bool()]  # [num_valid, 3]
         num_valid = valid_coords.shape[0]
