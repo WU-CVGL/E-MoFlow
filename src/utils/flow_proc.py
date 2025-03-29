@@ -9,6 +9,48 @@ from torch.nn import functional
 
 logger = logging.getLogger(__name__)
 
+def pixel_to_normalized_coords(pixel_coords, intrinsic_matrix):
+    assert pixel_coords.shape[0] == 1 and pixel_coords.shape[2] == 3, "The shape of pixel_coords should be (1, n, 3)"
+    assert intrinsic_matrix.shape == (3, 3), "The shape of intrinsic_matrix should be (3, 3)"
+
+    fx = intrinsic_matrix[0, 0]  
+    fy = intrinsic_matrix[1, 1]  
+    cx = intrinsic_matrix[0, 2] 
+    cy = intrinsic_matrix[1, 2]
+
+    x = pixel_coords[0, :, 0]  
+    y = pixel_coords[0, :, 1]  
+
+    x_n = (x - cx) / fx
+    y_n = (y - cy) / fy
+
+    ones = torch.ones_like(x_n)
+    normalized_coords = torch.stack([x_n, y_n, ones], dim=1)  
+    normalized_coords = normalized_coords.unsqueeze(0)  
+
+    return normalized_coords
+
+def flow_to_normalized_coords(image_plane_flow, intrinsic_matrix):
+    assert image_plane_flow.shape[0] == 1 and image_plane_flow.shape[2] == 3, "The shape of pixel_coords should be (1, n, 3)"
+    assert intrinsic_matrix.shape == (3, 3), "The shape of intrinsic_matrix should be (3, 3)"
+
+    fx = intrinsic_matrix[0, 0]  
+    fy = intrinsic_matrix[1, 1]  
+    cx = intrinsic_matrix[0, 2]  
+    cy = intrinsic_matrix[1, 2]  
+
+    flow_x = image_plane_flow[0, :, 0]  
+    flow_y = image_plane_flow[0, :, 1]  
+
+    flow_x_n = flow_x / fx
+    flow_y_n = flow_y / fy
+
+    ones = torch.zeros_like(flow_x_n)
+    normalized_plane_flow = torch.stack([flow_x_n, flow_y_n, ones], dim=1)  
+    normalized_plane_flow = normalized_plane_flow.unsqueeze(0)  
+
+    return normalized_plane_flow
+
 # The below code is coming from Zhu. et al, EV-FlowNet
 # Optical flow loader
 def estimate_corresponding_gt_flow(x_flow_in, y_flow_in, gt_timestamps, start_time, end_time):
