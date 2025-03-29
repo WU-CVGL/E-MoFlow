@@ -6,8 +6,6 @@ import cv2 as cv2
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
-from torchdiffeq import odeint
-from torchdiffeq import odeint_adjoint
 
 from tqdm import tqdm
 from typing import Dict
@@ -17,13 +15,14 @@ from src.loss.motion import MotionLoss
 from src.utils import misc
 from src.utils import pose
 from src.utils import event_proc
+from src.utils import flow_proc
 from src.utils import metric
 from src.utils import vector_math
 from src.utils import load_config
 from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp, NeuralODEWarpV2
-from src.model import geometric
+from src.model.geometric import Pixel2Cam
 from src.utils.timer import TimeAnalyzer
 from src.loader import dataset_manager
 from src.model.eventflow import DenseOpticalFlowCalc
@@ -62,12 +61,30 @@ def run_train_phase(
     time_analyzer: TimeAnalyzer,
     device: torch.device
 ):  
-    # Split events stream to extract data for validation
+    # load gt velocity
+    gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
+    gt_lin_vel_all = torch.from_numpy(gt_lin_vel_array).clone().to(device)
+    gt_ang_vel_all = torch.from_numpy(gt_ang_vel_array).clone().to(device)
+    gt_lin_vel_spline = pose.create_vel_cspline(gt_lin_vel_all)
+    gt_ang_vel_spline = pose.create_vel_cspline(gt_ang_vel_all)
+    
+    # generate coordinates on image plane
+    intrinsic_mat = torch.from_numpy(dataset.intrinsic).clone()
+    pixel2cam_converter = Pixel2Cam(
+        dataset._HEIGHT, dataset._WIDTH, 
+        intrinsic_mat,
+        device
+    )
+    image_coords = pixel2cam_converter.generate_image_coordinate()
+    norm_image_coords = pixel2cam_converter.generate_normalized_image_coordinate()
+    
+    # Split events stream 
     eval_frame_timestamp_list = dataset.eval_frame_time_list()
     eval_dt_list = [4]
     gt_dt = 4
     total_batch_events = []
     total_gt_flow = []
+    
     for eval_dt in tqdm(eval_dt_list, desc=f"Split the events into batches for validation", leave=True):
         for i1 in tqdm(
             range(len(eval_frame_timestamp_list) - eval_dt), 
@@ -114,10 +131,10 @@ def run_train_phase(
         warpper = NeuralODEWarpV2(flow_field, device, **warp_config)
         optimizer = optim.Adam(warpper.flow_field.parameters(), lr=optimizer_config["initial_lrate"])
         
-        K_tensor = torch.Tensor(
-            [[226.38018519795807, 0, 173.6470807871759],
-             [0, 226.15002947047415, 133.73271487507847],
-             [0, 0, 1]]).to(device)
+        # K_tensor = torch.Tensor(
+        #     [[226.38018519795807, 0, 173.6470807871759],
+        #      [0, 226.15002947047415, 133.73271487507847],
+        #      [0, 0, 1]]).to(device)
         
         # decay lr
         decay_steps = 1
@@ -130,7 +147,7 @@ def run_train_phase(
         print(f"Segment {i}")
         iter = 0
 
-        # if(i!=1825):
+        # if(i!=1825): # 1825
         #     continue
         for j in tqdm(range(num_epochs)):
             time_analyzer.start_epoch()
@@ -184,12 +201,56 @@ def run_train_phase(
                 var_loss_t_max = var_criterion(iwes[-1].unsqueeze(0))
                 var_loss_origin = var_criterion(origin_iwe)
                 var_loss = (var_loss_t_min + var_loss_t_max + 2 * var_loss_t_mid) / 4 * var_loss_origin
-                
+            
+            # sample coordinates
+            events_mask = imager.create_eventmask(warped_events)
+            events_mask = events_mask[0].squeeze(0).to(device)
+            sample_coords = pixel2cam_converter.sample_sparse_coordinates(
+                coord_tensor=image_coords,
+                mask=events_mask,
+                n=1000
+            )
+            t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
+            sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
+            
+            # get optical flow
+            sample_flow = warpper.flow_field.forward(sample_txy)
+            sample_flow = F.pad(sample_flow, (0, 1), mode='constant', value=0)
+            
+            # get gt velocity
+            v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
+            v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
+
+            # dec loss
+            sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
+            sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
+
+            x_batch_tensor = sample_norm_coords.squeeze(0)
+            u_batch_tensor = sample_norm_flow.squeeze(0)
+            v_skew = vector_to_skew_matrix(v_gt).squeeze(0)
+            w_skew = vector_to_skew_matrix(w_gt).squeeze(0)
+            
+            s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
+            
+            v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
+            s_x = torch.matmul(s, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
+            
+            term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1) # [N]
+            term2 = torch.sum(x_batch_tensor * s_x, dim=1)  # [N]
+            error = term1 - term2   
+            error = error.unsqueeze(0)
+            dec_loss = torch.mean(torch.square(error))
+            
             # Total loss
-            alpha, beta, gamma = 1, 1, 10
+            alpha, beta, gamma = 1, 1, 100
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
-            total_loss = - (scaled_grad_loss + scaled_var_loss)
+            scaled_dec_loss = gamma * dec_loss
+            
+            if(j<100):
+                total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss
+            else:
+                total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss
             
             # step
             total_loss.backward()
@@ -199,6 +260,12 @@ def run_train_phase(
             for param_group in optimizer.param_groups:
                 param_group['lr'] *= decay_factor
             iter+=1  
+            
+            # wandb_logger.write("var_loss", scaled_var_loss.item())
+            # wandb_logger.write("grad_loss", scaled_grad_loss.item())
+            # wandb_logger.write("dec_loss", scaled_dec_loss.item())
+            # wandb_logger.write("train_loss", total_loss.item())
+            # wandb_logger.update_buffer()
 
         # valid
         time_analyzer.start_valid()
@@ -223,13 +290,13 @@ def run_train_phase(
             
             flow_calculator = DenseOpticalFlowCalc(
                 grid_size=image_size, 
-                intrinsic_mat = K_tensor,
+                intrinsic_mat = intrinsic_mat,
                 model=warpper.flow_field, 
                 normalize_coords_mode="None", 
                 device=device
             )
-            t_start = eval_frame_timestamp_list[i] - dataset.min_gray_ts
-            t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_gray_ts
+            t_start = eval_frame_timestamp_list[i] - dataset.min_ts
+            t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_ts
             duration  = t_end - t_start
             
             # U, V, _, _ = flow_calculator.extract_flow_from_inr(t_start + 0.5 * duration, 1)
@@ -287,15 +354,12 @@ if __name__ == "__main__":
     # load dataset 
     dataloader_config = data_config.pop('loader')
     dataset = MVSECDataLoader(config=data_config)
-    dataset.set_sequence(data_config["sequence"], undistort=True)
-    
-    while(1):
-        pass
+    dataset.set_sequence(data_config["sequence"])
 
     # event2img converter
     image_size = (data_config["hight"], data_config["width"])
     imager = EventImageConverter(image_size)
-    
+
     # Visualizer
     viz = Visualizer(
         image_shape=image_size,
