@@ -151,3 +151,10 @@ def save_flow_error_as_text(
     save_file_name = os.path.join(dir, fname)
     with open(save_file_name, "a") as f:
         f.write(str(flow_error_dict) + "\n")
+        
+def save_theseus_result_as_text(
+    theseus_result: dict, dir: str, fname: str = "theseus_result.txt"
+):
+    save_file_name = os.path.join(dir, fname)
+    with open(save_file_name, "a") as f:
+        f.write(str(theseus_result) + "\n")
