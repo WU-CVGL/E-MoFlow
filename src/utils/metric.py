@@ -1,5 +1,8 @@
 import torch
 import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Optional, Union, Tuple, Dict, Any
 
 def evaluate_velocity(pred_angular, pred_linear, gt_angular, gt_linear):
     # RMSE
@@ -99,3 +102,76 @@ def calculate_flow_error(
     errors["AE"] = torch.mean(torch.sum(torch.acos(cosine_similarity), dim=(1, 2)) / n_points)
     errors["AE"] = errors["AE"] * (180.0 / torch.pi)
     return errors, endpoint_error
+
+def analyze_error_histogram(
+    errors: torch.Tensor, 
+    bins: int = 50,
+    figsize: Tuple[int, int] = (10, 6),
+    show_statistics: bool = False,
+    title: str = "error_distribution",
+    color: str = 'skyblue'
+) -> plt.Figure:
+    """
+    Parameters:
+        errors: 1D tensor containing error values
+        bins: Number of bins for the histogram
+        figsize: Size of the chart
+        show_statistics: Whether to display statistics on the chart
+        title: Title of the chart
+        color: Color of the histogram
+        
+    Returns:
+        matplotlib Figure object
+    """
+    if errors.dim() > 1:
+        errors = errors.flatten()
+    errors_np = errors.detach().cpu().numpy()
+    
+    # statstic
+    stats = {
+        "mean": float(errors_np.mean()),
+        "median": float(np.median(errors_np)),
+        "std": float(errors_np.std()),
+        "min": float(errors_np.min()),
+        "max": float(errors_np.max()),
+        "num_samples": len(errors_np)
+    }
+    
+    import warnings
+    warnings.filterwarnings("ignore", message="Blended transforms not yet supported")
+    
+    # hist_diagram
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111)
+    counts, bins, patches = ax.hist(
+        errors_np, 
+        bins=bins, 
+        alpha=0.7, 
+        color=color, 
+        edgecolor='black'
+    )
+    ax.set_title(f'{title} (n={len(errors_np)})')
+    ax.set_xlabel('error')
+    ax.set_ylabel('freq')
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.axvline(
+        stats["mean"], color='red', linestyle='-', linewidth=1.5, 
+        label=f'mean: {stats["mean"]:.4f}', 
+    )
+    ax.axvline(
+        stats["median"], color='green', linestyle='--', linewidth=1.5, 
+        label=f'median: {stats["median"]:.4f}', 
+    )
+    
+    # add text
+    if show_statistics:
+        info_text = f"mean: {stats['mean']:.4f}\median: {stats['median']:.4f}\std: {stats['std']:.4f}\n"
+        info_text += f"min: {stats['min']:.4f}\max: {stats['max']:.4f}\nnum_samples: {stats['num_samples']}"
+        ax.annotate(info_text, xy=(0.02, 0.98), xycoords='axes fraction', 
+                   verticalalignment='top', horizontalalignment='left',
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8))
+    
+    ax.legend()
+    # plt.tight_layout()
+    
+    return fig
