@@ -335,9 +335,9 @@ class MVSECDataLoader(DataLoaderBase):
 
     def load_gt_motion(self):
         timestamps_col = self.gt_timestamps.reshape(-1, 1) - self.min_ts
-        self.lin_vel_gt_all = np.hstack([timestamps_col, self.lin_vel_gt_all])  # shape (1280, 4)
-        self.ang_vel_gt_all = np.hstack([timestamps_col, self.ang_vel_gt_all])  # shape (1280, 4)
-        return self.lin_vel_gt_all, self.ang_vel_gt_all
+        self.lin_vel_gt_with_t_all = np.hstack([timestamps_col, self.lin_vel_gt_all])  # shape (1280, 4)
+        self.ang_vel_gt_with_t_all = np.hstack([timestamps_col, self.ang_vel_gt_all])  # shape (1280, 4)
+        return self.lin_vel_gt_with_t_all, self.ang_vel_gt_with_t_all
     
     def load_calib(self, sequence_name) -> dict:
         """Load calibration file.
