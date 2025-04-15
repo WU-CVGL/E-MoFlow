@@ -220,8 +220,10 @@ def run_train_phase(
             v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
             v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
+            dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
+            
             if(j % 100 == 0):
-                dec_error, _ = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
+                # dec_error, _ = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
                 hist_figure = metric.analyze_error_histogram(dec_error)
                 if(isinstance(hist_figure, mpl_fig.Figure)):
                     wandb_logger.write_img("error_distribution", hist_figure)
@@ -245,6 +247,7 @@ def run_train_phase(
                 init_velc=init_velc,
                 num_iterations=100
             )
+
             if(j>1000):
                 theseus_result = {
                     "v_his":v_his[:20],
@@ -266,9 +269,10 @@ def run_train_phase(
             
             # Motion loss
             motion_loss = criterion["motion_criterion"](w_opt, v_opt, w_gt, v_gt_norm)
+            dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
             
             # Total loss
-            alpha, beta, gamma = 1, 1, 50
+            alpha, beta, gamma = 1, 1, 5
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
             scaled_motion_loss = gamma * motion_loss
@@ -279,10 +283,16 @@ def run_train_phase(
             #     total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_motion_loss
             
             # if(j<200):
-            #     total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss))
+            #     total_loss = (1.0 / scaled_grad_loss)
             # else:
-            #     total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) + scaled_motion_loss
-            total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss))
+            #     total_loss = (1.0 / scaled_grad_loss) + scaled_motion_loss
+            
+            if(j<200):
+                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
+            else:
+                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) + 180 * average_dec_loss
+            # total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
+            
             # step
             total_loss.backward()
             optimizer.step()
@@ -294,7 +304,7 @@ def run_train_phase(
             
             wandb_logger.write("var_loss", scaled_var_loss.item())
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
-            wandb_logger.write("dec_loss", scaled_motion_loss.item())
+            wandb_logger.write("dec_loss", 180 * average_dec_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
             wandb_logger.write("v_dir_error", v_dir_error.item())
             wandb_logger.write("w_dir_error", w_dir_error.item())
@@ -302,62 +312,60 @@ def run_train_phase(
             wandb_logger.write("w_mag_error", w_mag_error.item())
             wandb_logger.update_buffer()
         
-        # valid
-        time_analyzer.start_valid()
-        with torch.no_grad():
-            valid_events = valid_events_origin.clone()
-            valid_events = valid_events[:, [2, 1, 0, 3]] # (y, x, t, p) ——> (t, x, y, p)
-            valid_events_txy = valid_events[:, :3]
-            
-            valid_ref = warpper.get_reference_time(valid_events_txy, "max")
-            warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
-            
-            # create image warped event 
-            num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]       
-            valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
-            warped_valid_events = torch.cat((warped_valid_events_txy[..., [1,2,0]], valid_polarity), dim=2).to(device)
-            warped_valid_events = warped_valid_events[...,[1,0,2,3]]
-            
-            # log
-            valid_warped_iwe = viz.create_clipped_iwe_for_visualization(warped_valid_events)
-            viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_"+ str(i))
-            
-            flow_calculator = DenseOpticalFlowCalc(
-                grid_size=image_size, 
-                intrinsic_mat = intrinsic_mat,
-                model=warpper.flow_field, 
-                normalize_coords_mode="None", 
-                device=device
-            )
-            t_start = eval_frame_timestamp_list[i] - dataset.min_ts
-            t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_ts
-            duration  = t_end - t_start
-            
-            # U, V, _, _ = flow_calculator.extract_flow_from_inr(t_start + 0.5 * duration, 1)
-            # pred_flow = torch.stack((V, U), dim=2).permute(2, 0, 1)
-            # pred_flow = pred_flow.cpu().numpy() * duration
-            pred_flow = flow_calculator.integrate_flow(t_start, t_end) # [H*W , 2]
-            pred_flow = pred_flow.cpu().numpy()
-            
-            viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
-            
-            pred_flow = torch.from_numpy(pred_flow).unsqueeze(0).to(device)
-            gt_flow = torch.from_numpy(gt_flow).unsqueeze(0).to(device)
-            event_mask = imager.create_eventmask(valid_events_origin).to(device)
-            flow_error, _ = metric.calculate_flow_error(gt_flow, pred_flow, event_mask=event_mask)  # type: ignore
-            
-            epe.append(flow_error["EPE"].item())
-            ae.append(flow_error["AE"].item())
-            out.append(flow_error["3PE"].item())
-            wandb_logger.write("EPE", flow_error["EPE"].item())
-            wandb_logger.write("AE", flow_error["AE"].item())
-            wandb_logger.write("1PE", flow_error["1PE"].item())
-            wandb_logger.write("2PE", flow_error["2PE"].item())
-            wandb_logger.write("3PE", flow_error["3PE"].item())
-            wandb_logger.update_buffer()
-          
-        time_analyzer.end_valid()
-        time_analyzer.end_epoch()
+            # valid
+            if(j % 100 == 0):
+                time_analyzer.start_valid()
+                with torch.no_grad():
+                    valid_events = valid_events_origin.clone()
+                    valid_events = valid_events[:, [2, 1, 0, 3]] # (y, x, t, p) ——> (t, x, y, p)
+                    valid_events_txy = valid_events[:, :3]
+                    
+                    valid_ref = warpper.get_reference_time(valid_events_txy, "max")
+                    warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
+                    
+                    # create image warped event 
+                    num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]       
+                    valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
+                    warped_valid_events = torch.cat((warped_valid_events_txy[..., [1,2,0]], valid_polarity), dim=2).to(device)
+                    warped_valid_events = warped_valid_events[...,[1,0,2,3]]
+                    
+                    # log
+                    valid_warped_iwe = viz.create_clipped_iwe_for_visualization(warped_valid_events)
+                    viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_"+ str(i))
+                    
+                    flow_calculator = DenseOpticalFlowCalc(
+                        grid_size=image_size, 
+                        intrinsic_mat = intrinsic_mat,
+                        model=warpper.flow_field, 
+                        normalize_coords_mode="None",
+                        device=device
+                    )
+                    t_start = eval_frame_timestamp_list[i] - dataset.min_ts
+                    t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_ts
+                    duration  = t_end - t_start
+                    
+                    pred_flow = flow_calculator.integrate_flow(t_start, t_end) # [H*W , 2]
+                    pred_flow = pred_flow.cpu().numpy()
+                    
+                    viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
+                    
+                    pred_flow = torch.from_numpy(pred_flow).unsqueeze(0).to(device)
+                    gt_flow_tensor = torch.from_numpy(gt_flow).unsqueeze(0).to(device)
+                    event_mask = imager.create_eventmask(valid_events_origin).to(device)
+                    flow_error, _ = metric.calculate_flow_error(gt_flow_tensor, pred_flow, event_mask=event_mask)  # type: ignore
+                    
+                    epe.append(flow_error["EPE"].item())
+                    ae.append(flow_error["AE"].item())
+                    out.append(flow_error["3PE"].item())
+                    wandb_logger.write("EPE", flow_error["EPE"].item())
+                    wandb_logger.write("AE", flow_error["AE"].item())
+                    wandb_logger.write("1PE", flow_error["1PE"].item())
+                    wandb_logger.write("2PE", flow_error["2PE"].item())
+                    wandb_logger.write("3PE", flow_error["3PE"].item())
+                    wandb_logger.update_buffer()
+                
+                time_analyzer.end_valid()
+                time_analyzer.end_epoch()
     error_dict = {"EPE": np.mean(epe), "AE": np.mean(ae), "3PE": np.mean(out)}
     logger.info(f"Average EPE: {np.mean(epe)}")
     logger.info(f"Average AE: {np.mean(ae)}")
