@@ -26,7 +26,7 @@ from src.utils import load_config
 from src.model.eventflow import EventFlowINR
 from src.utils.wandb import WandbLogger
 from src.model.warp import NeuralODEWarp, NeuralODEWarpV2
-from src.model.geometric import Pixel2Cam, DiffEpipolarTheseusOptimizer
+from src.model.geometric import Pixel2Cam, DiffEpipolarTheseusOptimizer, MotionModel
 from src.utils.timer import TimeAnalyzer
 from src.loader import dataset_manager
 from src.model.eventflow import DenseOpticalFlowCalc
@@ -209,7 +209,6 @@ def run_train_phase(
             sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
             
             # get optical flow and coordinate on normalized plane
-            
             sample_flow = warpper.flow_field.forward(sample_txy)
             sample_flow = F.pad(sample_flow, (0, 1), mode='constant', value=0)
             sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
@@ -220,10 +219,10 @@ def run_train_phase(
             v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
             v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
+            w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
             dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
             
             if(j % 100 == 0):
-                # dec_error, _ = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
                 hist_figure = metric.analyze_error_histogram(dec_error)
                 if(isinstance(hist_figure, mpl_fig.Figure)):
                     wandb_logger.write_img("error_distribution", hist_figure)
@@ -234,16 +233,17 @@ def run_train_phase(
 
             # intial value for differential epipolar constrain
             v_noise_level = 0.01
-            w_noise_level = 0.01
+            # w_noise_level = 0.01
             v_gt_noisy = v_gt + v_noise_level * torch.randn_like(v_gt, device=v_gt.device)
-            w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
+            # w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
             v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-            init_velc = [v_gt_noisy, w_gt_noisy]
+            # init_velc = [v_gt_noisy, w_gt_noisy]
+            init_velc = [v_gt_noisy]
             
             # theseus optimize 
-            v_opt, w_opt, v_his, w_his, err_his = dec_theseus_optimizer.optimize(
+            v_opt, v_his, err_his = dec_theseus_optimizer.optimize(
                 sample_norm_coords, sample_norm_flow,  
-                only_rotation=False, 
+                motion_model=MotionModel.PURE_TRANSLATION,
                 init_velc=init_velc,
                 num_iterations=100
             )
@@ -254,28 +254,28 @@ def run_train_phase(
                     "v_init": v_gt_noisy,
                     "v_opt": v_opt,
                     "v_gt": v_gt_norm,
-                    "w_his": w_his[:20],
-                    "w_init": w_gt_noisy,
-                    "w_opt": w_opt,
+                    # "w_his": w_his[:20],
+                    # "w_init": w_gt_noisy,
+                    # "w_opt": w_opt,
                     "w_gt": w_gt, 
                     "err_his": err_his[:20]
                 }
                 misc.save_theseus_result_as_text(theseus_result, config["logger"]["results_dir"])
 
             v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt, v_gt_norm)
-            w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
+            # w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
             v_mag_error = vector_math.vector_mag_error(v_opt, v_gt_norm)
-            w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
+            # w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
             
             # Motion loss
-            motion_loss = criterion["motion_criterion"](w_opt, v_opt, w_gt, v_gt_norm)
-            dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
-            
+            w_opt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
+            ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
+                    
             # Total loss
             alpha, beta, gamma = 1, 1, 5
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
-            scaled_motion_loss = gamma * motion_loss
+            scaled_ssl_dec_loss = 180 * ssl_average_dec_loss
             
             # if(j<500):
             #     total_loss = - (scaled_grad_loss + scaled_var_loss)
@@ -290,7 +290,7 @@ def run_train_phase(
             if(j<200):
                 total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
             else:
-                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) + 180 * average_dec_loss
+                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) + scaled_ssl_dec_loss
             # total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
             
             # step
@@ -304,12 +304,12 @@ def run_train_phase(
             
             wandb_logger.write("var_loss", scaled_var_loss.item())
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
-            wandb_logger.write("dec_loss", 180 * average_dec_loss.item())
+            wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
             wandb_logger.write("v_dir_error", v_dir_error.item())
-            wandb_logger.write("w_dir_error", w_dir_error.item())
+            # wandb_logger.write("w_dir_error", w_dir_error.item())
             wandb_logger.write("v_mag_error", v_mag_error.item())
-            wandb_logger.write("w_mag_error", w_mag_error.item())
+            # wandb_logger.write("w_mag_error", w_mag_error.item())
             wandb_logger.update_buffer()
         
             # valid
