@@ -8,7 +8,7 @@ from typing import List
 from src.model import embedder
 
 class EventFlowINR(nn.Module):
-    def __init__(self, config, D=2, W=256, input_ch=3, output_ch=2, skips=[]):
+    def __init__(self, config, D=8, W=256, input_ch=3, output_ch=2, skips=[4]):
         super().__init__()
         self.config = config
         self.D = D
@@ -23,7 +23,7 @@ class EventFlowINR(nn.Module):
             [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in
                                         range(D - 1)])
 
-        self.output_linear = nn.Linear(W, output_ch)
+        self.output_linear = nn.Linear(W+input_ch if self.skips[-1]==D-1 else W, output_ch)
 
     def forward(self, coord_txy: torch.Tensor):
         # create positional encoding
@@ -36,9 +36,13 @@ class EventFlowINR(nn.Module):
         
         # input_pts, input_views = torch.split(embedded, [self.input_ch, self.input_ch_views], dim=-1)
         h = embedded_coord_xyt
+        layer_outputs = []
         for i, l in enumerate(self.coord_linears):
             h = self.coord_linears[i](h)
+            if len(layer_outputs) > 0:
+                h = h + layer_outputs[-1]
             h = F.relu(h)
+            layer_outputs.append(h)
             # h = self.leaky_relu(h)
             if i in self.skips:
                 h = torch.cat([embedded_coord_xyt, h], -1)
