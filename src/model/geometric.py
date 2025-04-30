@@ -1,6 +1,7 @@
 import torch
 import kornia
 import theseus as th
+import torch.nn as nn
 
 from typing import Optional, Tuple, cast
 from src.utils.vector_math import vector_to_skew_matrix
@@ -95,9 +96,12 @@ class Pixel2Cam:
     ) -> torch.Tensor:
         assert coord_tensor.dim() == 4 and coord_tensor.shape[0] == 1, "The coordinate tensor shape should be [1, H, W, 3]."
         H, W = coord_tensor.shape[1], coord_tensor.shape[2]
-        assert mask.shape == (H, W), "The mask shape does not match the coordinate tensor."
         
-        valid_coords = coord_tensor[0][mask.bool()]  # [num_valid, 3]
+        if mask == None:
+            valid_coords = coord_tensor[0].view(-1, 3)
+        else:
+            assert mask.shape == (H, W), "The mask shape does not match the coordinate tensor."
+            valid_coords = coord_tensor[0][mask.bool()]  # [num_valid, 3]
         num_valid = valid_coords.shape[0]
         
         if num_valid == 0:
@@ -139,21 +143,17 @@ class DiffEpipolarTheseusOptimizer:
         v_vec_tensor, w_vec_tensor = v_vec.tensor, w_vec.tensor
         x_batch_tensor, u_batch_tensor = x_batch.tensor, u_batch.tensor
         
-        x_batch_tensor = x_batch_tensor.squeeze(0)
-        u_batch_tensor = u_batch_tensor.squeeze(0)
-        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)
-        w_skew = vector_to_skew_matrix(w_vec_tensor).squeeze(0)
+        x_batch_tensor = x_batch_tensor.squeeze(0).transpose(0,1) # [3,N]
+        u_batch_tensor = u_batch_tensor.squeeze(0).transpose(0,1) # [3,N]
+        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)   # [3,3]
+        w_skew = vector_to_skew_matrix(w_vec_tensor).squeeze(0)   # [3,3]
         
         s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
         
-        v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
-        s_x = torch.matmul(s, x_batch_tensor.transpose(0,1)).transpose(0,1)  # [N,3]
-        
-        term1 = torch.sum(u_batch_tensor * v_skew_x, dim=1) # [N]
-        term2 = torch.sum(x_batch_tensor * s_x, dim=1)  # [N]
+        term1 = torch.einsum("in,ij,jn->n", u_batch_tensor, v_skew, x_batch_tensor)
+        term2 = torch.einsum("in,ij,jn->n", x_batch_tensor, s, x_batch_tensor)
         error = term1 - term2
         error = error.unsqueeze(0)
-        # dec_loss = torch.mean(error).reshape(1,1)
         
         return error
     
@@ -176,61 +176,67 @@ class DiffEpipolarTheseusOptimizer:
         v_vec_tensor = v_vec.tensor
         x_batch_tensor, u_batch_tensor = x_batch.tensor, u_batch.tensor
         
-        x_batch_tensor = x_batch_tensor.squeeze(0)
-        u_batch_tensor = u_batch_tensor.squeeze(0)
-        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)
+        x_batch_tensor = x_batch_tensor.squeeze(0).transpose(0,1)  # [3,N]
+        u_batch_tensor = u_batch_tensor.squeeze(0).transpose(0,1)  # [3,N]
+        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)    # [3,3]
         
-        v_skew_x = torch.matmul(v_skew, x_batch_tensor.transpose(0,1)).transpose(0,1) # [N,3]
-        error = torch.sum(u_batch_tensor * v_skew_x, dim=1).unsqueeze(0)
+        term1 = torch.einsum("in,ij,jn->n", u_batch_tensor, v_skew, x_batch_tensor)  # shape (N,)
+        error = term1.unsqueeze(0)
         
         return error
     
     def velocity_constraint_fn(self, optim_vars, aux_vars=None):
         v_vec = optim_vars[0]
         v_norm = torch.norm(v_vec.tensor, p=2, dim=-1)
-        return (v_norm - 1.0).unsqueeze(0)  # [1,1] shape
+        return 1000 * (v_norm - 1.0).unsqueeze(0)  # [1,1] shape
     
     def create_cost_function(self, normalized_coords, optical_flow, motion_model: MotionModel):
         x = th.Variable(normalized_coords, name="norm_coords")  # [1,N,3]
         u = th.Variable(optical_flow, name="optical_flow")      # [1,N,3]
         
         if motion_model == MotionModel.SIXDOF_MOTION:     
-            v = th.Vector(dof=3, name="linear_velocity") 
-            w = th.Vector(dof=3, name="angular_velocity") 
+            v = th.Vector(
+                tensor=torch.zeros(1, 3, dtype=torch.float32, device=self.device), 
+                name="linear_velocity"
+            ) 
+            w = th.Vector(
+                tensor=torch.zeros(1, 3, dtype=torch.float32, device=self.device), 
+                name="angular_velocity"
+            ) 
             optim_vars = [v, w]
             aux_vars = [x, u]
-            w_dec_value = torch.tensor((1 / x.shape[1]), dtype=torch.float32)
-            w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
-            w_norm_value = torch.tensor(1, dtype=torch.float32) 
-            w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
+            # w_dec_value = torch.tensor((1 / x.shape[1]), dtype=torch.float32)
+            # w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
+            # w_norm_value = torch.tensor(1, dtype=torch.float32) 
+            # w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
 
             dec_cost_fn = th.AutoDiffCostFunction(
                 optim_vars,
                 self.dec_error_fn,
                 x.shape[1],
-                w_dec,
+                # w_dec,
                 aux_vars=aux_vars,
                 name="dec_cost_fn"
             )
             
-            log_loss_radius = th.Vector(1, name="log_loss_radius", dtype=torch.float32)
-            robust_dec_cost_fn = th.RobustCostFunction(
-                dec_cost_fn,
-                th.HuberLoss,
-                log_loss_radius,
-                name=f"robust_{dec_cost_fn.name}",
-            )
+            # log_loss_radius = th.Vector(1, name="log_loss_radius", dtype=torch.float32)
+            # robust_dec_cost_fn = th.RobustCostFunction(
+            #     dec_cost_fn,
+            #     th.HuberLoss,
+            #     log_loss_radius,
+            #     name=f"robust_{dec_cost_fn.name}",
+            # )
         
             vel_cost_fn = th.AutoDiffCostFunction(
                 [v],
                 self.velocity_constraint_fn,
                 1,
-                w_norm,
+                # w_norm,
                 aux_vars=None,
                 name="velocity_constraint"
             )
         
-            return [robust_dec_cost_fn, vel_cost_fn]
+            return [dec_cost_fn, vel_cost_fn]
         
         elif motion_model == MotionModel.PURE_ROTATION:
             w = th.Vector(dof=3, name="angular_velocity")
@@ -252,21 +258,21 @@ class DiffEpipolarTheseusOptimizer:
         
         elif motion_model == MotionModel.PURE_TRANSLATION:
             v = th.Vector(
-                tensor=torch.zeros(1, 3, dtype=torch.float32, device=self.device), 
+                tensor=torch.zeros(1, 1, 3, dtype=torch.float32, device=self.device), 
                 name="linear_velocity"
             ) 
             optim_vars = [v]
             aux_vars = [x, u]
-            w_dec_value = torch.tensor((1 / x.shape[1]), dtype=torch.float32, device=self.device)
-            w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
-            w_norm_value = torch.tensor(1, dtype=torch.float32, device=self.device) 
-            w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
+            # w_dec_value = torch.tensor((1 / x.shape[1]), dtype=torch.float32, device=self.device)
+            # w_dec = th.ScaleCostWeight(torch.sqrt(w_dec_value))
+            # w_norm_value = torch.tensor(1, dtype=torch.float32, device=self.device) 
+            # w_norm = th.ScaleCostWeight(torch.sqrt(w_norm_value))
 
             trans_cost_fn = th.AutoDiffCostFunction(
                 optim_vars,
                 self.translation_error_fn,
                 x.shape[1],
-                w_dec,
+                # w_dec,
                 aux_vars=aux_vars,
                 name="trans_cost_fn"
             )
@@ -286,7 +292,7 @@ class DiffEpipolarTheseusOptimizer:
                 [v],
                 self.velocity_constraint_fn,
                 1,
-                w_norm,
+                # w_norm,
                 aux_vars=None,
                 name="velocity_constraint"
             )
@@ -316,17 +322,15 @@ class DiffEpipolarTheseusOptimizer:
             
         optimizer = th.LevenbergMarquardt(
             objective,
-            # linear_solver_cls=th.CholeskyDenseSolver,
-            # linearization_cls=th.DenseLinearization,
-            linear_solver_cls=th.LUCudaSparseSolver,
-            linearization_cls=th.SparseLinearization,
+            linear_solver_cls=th.CholeskyDenseSolver,
+            linearization_cls=th.DenseLinearization,
             vectorize=True,
             empty_cuda_cache=True,
             step_size=0.1,
             abs_err_tolerance=1.0e-20,
             rel_err_tolerance=1.0e-8,
             kwargs={
-                "backward_mode": th.BackwardMode["UNROLL"],
+                "backward_mode": th.BackwardMode.UNROLL,
                 "max_iterations": num_iterations,
                 "damping": 1.0,
                 "adaptive_damping": True,
@@ -335,7 +339,7 @@ class DiffEpipolarTheseusOptimizer:
                 "track_state_history": True,
             }
         )
-        
+
         if init_velc is not None:
             if motion_model == MotionModel.PURE_TRANSLATION:
                 v_init = init_velc[0]
@@ -361,7 +365,7 @@ class DiffEpipolarTheseusOptimizer:
         theseus_inputs = {
             "norm_coords": normalized_coords,
             "optical_flow": optical_flow,
-            "log_loss_radius": torch.log(torch.tensor([5e-3])).unsqueeze(1).to(self.device)
+            # "log_loss_radius": torch.log(torch.tensor([5e-3])).unsqueeze(1).to(self.device)
         }
         if motion_model == MotionModel.PURE_TRANSLATION:
             theseus_inputs["linear_velocity"] = v_init
@@ -377,7 +381,7 @@ class DiffEpipolarTheseusOptimizer:
         updated_inputs, info = theseus_layer.forward(
             theseus_inputs,
             optimizer_kwargs={
-                "backward_mode": th.BackwardMode["UNROLL"],
+                "backward_mode": th.BackwardMode.UNROLL,
                 "max_iterations": num_iterations,
                 "damping": 1.0, 
                 "adaptive_damping": True,
@@ -386,6 +390,9 @@ class DiffEpipolarTheseusOptimizer:
                 "track_state_history": True,
             }
         )
+        
+        final_linearization = optimizer.linear_solver.linearization
+        hessian = final_linearization.AtA  # [6,6]
         
         if motion_model == MotionModel.PURE_ROTATION:
             w_opt = updated_inputs["angular_velocity"]
