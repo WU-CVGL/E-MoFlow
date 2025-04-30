@@ -1,43 +1,41 @@
 import os
 import sys
-import wandb
+import math
 import torch 
 import logging
 import cv2 as cv2
 import numpy as np
+import torch.optim as optim
 import matplotlib.pyplot as plt
 import matplotlib.figure as mpl_fig
-import torch.optim as optim
-import torch.nn.functional as F
 
 from tqdm import tqdm
 from typing import Dict
+from torch.optim.lr_scheduler import LambdaLR
+
+from src.utils import (
+    misc,
+    pose,
+    flow_proc,
+    metric,
+    vector_math,
+    load_config
+)
+
+from src.loader.MVSEC.loader import MVSECDataLoader
 
 from src.loss.focus import FocusLoss
 from src.loss.motion import MotionLoss
 from src.loss.dec import differential_epipolar_constrain
-from src.utils import misc
-from src.utils import pose
-from src.utils import event_proc
-from src.utils import flow_proc
-from src.utils import metric
-from src.utils import vector_math
-from src.utils import load_config
-from src.model.eventflow import EventFlowINR
-from src.utils.wandb import WandbLogger
-from src.model.warp import NeuralODEWarp, NeuralODEWarpV2
-from src.model.geometric import Pixel2Cam, DiffEpipolarTheseusOptimizer, MotionModel
-from src.utils.timer import TimeAnalyzer
-from src.loader import dataset_manager
-from src.model.eventflow import DenseOpticalFlowCalc
-from src.utils.event_image_converter import EventImageConverter
-from src.utils.visualizer import Visualizer
 
-from src.utils.vector_math import vector_to_skew_matrix
-from src.loader.MVSEC.loader import MVSECDataLoader
-from src.utils.filter import MedianPool2d
-from src.utils.misc import create_scheduler
-from src.utils.misc import plot_velocity
+from src.model.warp import NeuralODEWarpV2
+from src.model.eventflow import EventFlowINR, DenseOpticalFlowCalc
+from src.model.geometric import Pixel2Cam, DiffEpipolarTheseusOptimizer, MotionModel
+
+from src.utils.wandb import WandbLogger
+from src.utils.timer import TimeAnalyzer
+from src.utils.visualizer import Visualizer
+from src.utils.event_image_converter import EventImageConverter
 
 # log
 logging.basicConfig(
@@ -53,12 +51,57 @@ logger = logging.getLogger(__name__)
 
 torch.set_float32_matmul_precision('high')
 
+def create_expcos_scheduler(optimizer, lr_start, lr_end_exp, lr_end_cos, exp_steps, cos_steps):
+    assert exp_steps > 0, "exp_steps must be greater than 0"
+    assert cos_steps > 0, "cos_steps must be greater than 0"
+    assert lr_start > lr_end_exp > lr_end_cos, "Learning rates must satisfy lr_start > lr_end_exp > lr_end_cos"
+    
+    def lr_lambda(current_step):
+        # exp decay
+        if current_step < exp_steps:
+            decay_factor = (lr_end_exp / lr_start) ** (current_step / exp_steps)
+            return decay_factor
+        
+        # cosine decay
+        t = current_step - exp_steps
+        if t >= cos_steps:
+            return lr_end_cos / lr_start
+        
+        cosine_factor = 0.5 * (1 + math.cos(math.pi * t / cos_steps))
+        current_lr = lr_end_cos + (lr_end_exp - lr_end_cos) * cosine_factor
+        return current_lr / lr_start
+    
+    # initiate optimizer
+    optimizer.param_groups[0]['lr'] = lr_start
+    return LambdaLR(optimizer, lr_lambda)
+
+def create_cosexp_scheduler(optimizer, lr_start, lr_end_cos, lr_end_exp, cos_steps, exp_steps):
+    assert cos_steps > 0 and exp_steps > 0, "cos_steps must be greater than 0"
+    assert lr_start > lr_end_cos,  "Learning rates must satisfy lr_start > lr_end_cos > lr_end_exp"
+    
+    def lr_lambda(current_step):
+        if current_step < cos_steps:
+            t = current_step
+            cosine_factor = 0.5 * (1 + math.cos(math.pi * t / cos_steps))
+            current_lr = lr_end_cos + (lr_start - lr_end_cos) * cosine_factor
+            return current_lr / lr_start
+        
+        t = current_step - cos_steps
+        if t >= exp_steps:
+            return lr_end_exp / lr_start
+        
+        decay_factor = (lr_end_exp / lr_end_cos) ** (t / exp_steps)
+        current_lr = lr_end_cos * decay_factor
+        return current_lr / lr_start
+    
+    # initiate optimizer
+    optimizer.param_groups[0]['lr'] = lr_start
+    return LambdaLR(optimizer, lr_lambda)
+
 def run_train_phase(
     args, 
     config: Dict, 
     dataset: MVSECDataLoader,
-    # warpper: NeuralODEWarp,
-    # nn_optimizer: torch.optim,
     criterion: Dict,
     imager: EventImageConverter,
     viz: Visualizer,
@@ -134,19 +177,28 @@ def run_train_phase(
         flow_field = EventFlowINR(model_config).to(device)
         warpper = NeuralODEWarpV2(flow_field, device, **warp_config)
         dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
-        optimizer = optim.AdamW(warpper.flow_field.parameters(), lr=optimizer_config["initial_lrate"])
+        nn_optimizer = optim.Adam(warpper.flow_field.parameters())
         
         # decay lr
-        num_epochs = config["optimizer"]["num_epoch"]
-        final_lrate = config["optimizer"]["final_lrate"]
-        initial_lrate = config["optimizer"]["initial_lrate"]
+        optimizer_config = config["optimizer"]
+        num_epochs = optimizer_config["num_epoch"]
+        
+        nn_scheduler = create_cosexp_scheduler(
+            optimizer=nn_optimizer,
+            lr_start=optimizer_config["nn_lr_1"],
+            lr_end_cos=optimizer_config["nn_lr_2"],
+            lr_end_exp=optimizer_config["nn_lr_3"],
+            cos_steps=1000,
+            exp_steps=num_epochs - 1000
+        )
+        
         print(f"Segment {i}")
         iter = 0
 
         for j in tqdm(range(num_epochs)):
             time_analyzer.start_epoch()
             
-            optimizer.zero_grad()
+            nn_optimizer.zero_grad()
             
             batch_events = valid_events_origin.clone() # (y, x, t, p)
             origin_iwe = imager.create_iwes(batch_events)
@@ -204,83 +256,84 @@ def run_train_phase(
             
             # get optical flow and coordinate on normalized plane
             sample_flow = warpper.flow_field.forward(sample_txy)
-            sample_flow = F.pad(sample_flow, (0, 1), mode='constant', value=0)
+            sample_flow = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
             sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
             sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
             
-            # get gt velocity
-            v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
-            v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
-            v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
-            # w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
-            dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
             
-            if(j % 100 == 0):
-                hist_figure = metric.analyze_error_histogram(dec_error)
-                if(isinstance(hist_figure, mpl_fig.Figure)):
-                    wandb_logger.write_img("error_distribution", hist_figure)
-                    hist_figure_save_dir = config["logger"]["results_dir"]
-                    hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
-                    hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
-                    plt.close(hist_figure)
+            # # get gt velocity
+            # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
+            # v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
+            # v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
+            
+            # # w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
+            # dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
+            
+            # if(j % 100 == 0):
+            #     hist_figure = metric.analyze_error_histogram(dec_error)
+            #     if(isinstance(hist_figure, mpl_fig.Figure)):
+            #         wandb_logger.write_img("error_distribution", hist_figure)
+            #         hist_figure_save_dir = config["logger"]["results_dir"]
+            #         hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
+            #         hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
+            #         plt.close(hist_figure)
 
-            # intial value for differential epipolar constrain
-            v_noise_level = 0.1
-            w_noise_level = 0.01
-            v_gt_noisy = v_gt + v_noise_level * torch.randn_like(v_gt, device=v_gt.device)
-            w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
-            v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-            init_velc = [v_gt_noisy, w_gt_noisy]
-            # init_velc = [v_gt_noisy]
+            # # intial value for differential epipolar constrain
+            # v_noise_level = 0.1
+            # w_noise_level = 0.01
+            # v_gt_noisy = v_gt + v_noise_level * torch.randn_like(v_gt, device=v_gt.device)
+            # w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
+            # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
+            # init_velc = [v_gt_noisy, w_gt_noisy]
+            # # init_velc = [v_gt_noisy]
             
-            # theseus optimize 
-            dec_theseus_optimizer.iteration = j
-            v_opt, w_opt, v_his, w_his, err_his = dec_theseus_optimizer.optimize(
-                sample_norm_coords, sample_norm_flow,  
-                motion_model=MotionModel.SIXDOF_MOTION,
-                init_velc=init_velc,
-                num_iterations=100
-            )
+            # # theseus optimize 
+            # v_opt, w_opt, v_his, w_his, err_his = dec_theseus_optimizer.optimize(
+            #     sample_norm_coords, sample_norm_flow,  
+            #     motion_model=MotionModel.SIXDOF_MOTION,
+            #     init_velc=init_velc,
+            #     num_iterations=100
+            # )
 
-            if(j>1000):
-                theseus_result = {
-                    "v_his":v_his[:20],
-                    "v_init": v_gt_noisy,
-                    "v_opt": v_opt,
-                    "v_gt": v_gt_norm,
-                    "w_his": w_his[:20],
-                    "w_init": w_gt_noisy,
-                    "w_opt": w_opt,
-                    "w_gt": w_gt, 
-                    "err_his": err_his[:20]
-                }
-                misc.save_theseus_result_as_text(theseus_result, config["logger"]["results_dir"])
+            # if(j>1000):
+            #     theseus_result = {
+            #         "v_his":v_his[:20],
+            #         "v_init": v_gt_noisy,
+            #         "v_opt": v_opt,
+            #         "v_gt": v_gt_norm,
+            #         "w_his": w_his[:20],
+            #         "w_init": w_gt_noisy,
+            #         "w_opt": w_opt,
+            #         "w_gt": w_gt, 
+            #         "err_his": err_his[:20]
+            #     }
+            #     misc.save_theseus_result_as_text(theseus_result, config["logger"]["results_dir"])
 
-            v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt, v_gt_norm)
-            w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
-            v_mag_error = vector_math.vector_mag_error(v_opt, v_gt_norm)
-            w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
+            # v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt, v_gt_norm)
+            # w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
+            # v_mag_error = vector_math.vector_mag_error(v_opt, v_gt_norm)
+            # w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
             
-            # Motion loss
-            # w_opt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
-            ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
+            # # Motion loss
+            # # w_opt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
+            # ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
             
             # Total loss
             alpha, beta, gamma = 1, 1, 100 
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
-            scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
+            # scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
             
             if(j<1000):
                 total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
             else:
-                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) + scaled_ssl_dec_loss
+                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss))
             
             # step
             total_loss.backward()
-            optimizer.step()
-            
+            nn_optimizer.step()
+            nn_scheduler.step()
             iter+=1  
             
             mlp_grad_norm = 0
@@ -288,15 +341,16 @@ def run_train_phase(
                 if p.grad is not None:
                     mlp_grad_norm += p.grad.data.norm(2).item() ** 2
             
+            wandb_logger.write("lr", nn_optimizer.param_groups[0]['lr'])
             wandb_logger.write("mlp_grad_norm", mlp_grad_norm)
             wandb_logger.write("var_loss", scaled_var_loss.item())
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
-            wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
+            # wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
-            wandb_logger.write("v_dir_error", v_dir_error.item())
-            wandb_logger.write("w_dir_error", w_dir_error.item())
-            wandb_logger.write("v_mag_error", v_mag_error.item())
-            wandb_logger.write("w_mag_error", w_mag_error.item())
+            # wandb_logger.write("v_dir_error", v_dir_error.item())
+            # wandb_logger.write("w_dir_error", w_dir_error.item())
+            # wandb_logger.write("v_mag_error", v_mag_error.item())
+            # wandb_logger.write("w_mag_error", w_mag_error.item())
             wandb_logger.update_buffer()
         
             # valid
