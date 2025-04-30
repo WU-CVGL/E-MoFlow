@@ -4,6 +4,7 @@ import random
 import logging
 import numpy as np
 import imageio.v2 as imageio
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from typing import List, Union
@@ -158,3 +159,36 @@ def save_theseus_result_as_text(
     save_file_name = os.path.join(dir, fname)
     with open(save_file_name, "a") as f:
         f.write(str(theseus_result) + "\n")
+
+def plot_velocity(lin_vel_array, ang_vel_array, save_dir, prefix_filename):
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    def _plot_single(vel_array, plot_type):
+        t = vel_array[:, 0]
+        x = vel_array[:, 1]
+        y = vel_array[:, 2]
+        z = vel_array[:, 3]
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(t, x, label='X', color='red', linewidth=1)
+        plt.plot(t, y, label='Y', color='green', linewidth=1)
+        plt.plot(t, z, label='Z', color='blue', linewidth=1)
+        
+        if plot_type == "linear":
+            plt.ylabel("Linear Velocity", fontsize=12)
+            plt.title("Linear Velocity Components vs Time", fontsize=14)
+            filename = prefix_filename + "linear_velocity.png"
+        else:
+            plt.ylabel("Angular Velocity", fontsize=12)
+            plt.title("Angular Velocity Components vs Time", fontsize=14)
+            filename = prefix_filename + "angular_velocity.png"
+            
+        plt.xlabel("Time", fontsize=12)
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.savefig(os.path.join(save_dir, filename), dpi=300, bbox_inches='tight')
+        plt.close()
+
+    _plot_single(lin_vel_array, "linear")
+    _plot_single(ang_vel_array, "angular")
