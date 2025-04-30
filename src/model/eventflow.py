@@ -2,10 +2,10 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from torchdiffeq import odeint
 
 from typing import List
 from src.model import embedder
+from torchdiffeq import odeint
 
 class EventFlowINR(nn.Module):
     def __init__(self, config, D=8, W=256, input_ch=3, output_ch=2, skips=[4]):
@@ -42,8 +42,8 @@ class EventFlowINR(nn.Module):
             if len(layer_outputs) > 0:
                 h = h + layer_outputs[-1]
             h = F.relu(h)
-            layer_outputs.append(h)
             # h = self.leaky_relu(h)
+            layer_outputs.append(h)
             if i in self.skips:
                 h = torch.cat([embedded_coord_xyt, h], -1)
        
