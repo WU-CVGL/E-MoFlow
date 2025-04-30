@@ -36,7 +36,8 @@ from src.utils.visualizer import Visualizer
 from src.utils.vector_math import vector_to_skew_matrix
 from src.loader.MVSEC.loader import MVSECDataLoader
 from src.utils.filter import MedianPool2d
-
+from src.utils.misc import create_scheduler
+from src.utils.misc import plot_velocity
 
 # log
 logging.basicConfig(
@@ -112,6 +113,9 @@ def run_train_phase(
     out = []
     
     for i in tqdm(range(len(total_batch_events))):
+        if(i!=1825): # 1825
+            continue
+        
         valid_events_origin = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
         valid_origin_iwe = viz.create_clipped_iwe_for_visualization(valid_events_origin)
         viz.visualize_image(valid_origin_iwe.squeeze(0), file_prefix="origin_iwe_" + str(i))
@@ -130,21 +134,15 @@ def run_train_phase(
         flow_field = EventFlowINR(model_config).to(device)
         warpper = NeuralODEWarpV2(flow_field, device, **warp_config)
         dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
-        optimizer = optim.Adam(warpper.flow_field.parameters(), lr=optimizer_config["initial_lrate"])
+        optimizer = optim.AdamW(warpper.flow_field.parameters(), lr=optimizer_config["initial_lrate"])
         
         # decay lr
-        decay_steps = 1
         num_epochs = config["optimizer"]["num_epoch"]
         final_lrate = config["optimizer"]["final_lrate"]
         initial_lrate = config["optimizer"]["initial_lrate"]
-        decay_factor = (final_lrate / initial_lrate) ** (1 / (num_epochs / decay_steps))
-        # print(f"learning rate decay factor:{decay_factor}")
-        # initial_lr = optimizer.param_groups[0]['lr']
         print(f"Segment {i}")
         iter = 0
 
-        if(i!=1825): # 1825
-            continue
         for j in tqdm(range(num_epochs)):
             time_analyzer.start_epoch()
             
@@ -168,10 +166,6 @@ def run_train_phase(
             warped_events = warped_events[...,[1,0,2,3]] # (x,y,t,p) ——> (y,x,t,p)
             
             # events should be reorganized as (y,x,t,p) that can processed by create_iwes
-            # if(j < 500):
-            #     blur_kernel_sigma = 3
-            # else:
-            #     blur_kernel_sigma = 1
             iwes = imager.create_iwes(
                 events=warped_events,
                 method="bilinear_vote",
@@ -219,7 +213,7 @@ def run_train_phase(
             v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
             v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
             
-            w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
+            # w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
             dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
             
             if(j % 100 == 0):
@@ -232,18 +226,19 @@ def run_train_phase(
                     plt.close(hist_figure)
 
             # intial value for differential epipolar constrain
-            v_noise_level = 0.01
-            # w_noise_level = 0.01
+            v_noise_level = 0.1
+            w_noise_level = 0.01
             v_gt_noisy = v_gt + v_noise_level * torch.randn_like(v_gt, device=v_gt.device)
-            # w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
+            w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
             v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-            # init_velc = [v_gt_noisy, w_gt_noisy]
-            init_velc = [v_gt_noisy]
+            init_velc = [v_gt_noisy, w_gt_noisy]
+            # init_velc = [v_gt_noisy]
             
             # theseus optimize 
-            v_opt, v_his, err_his = dec_theseus_optimizer.optimize(
+            dec_theseus_optimizer.iteration = j
+            v_opt, w_opt, v_his, w_his, err_his = dec_theseus_optimizer.optimize(
                 sample_norm_coords, sample_norm_flow,  
-                motion_model=MotionModel.PURE_TRANSLATION,
+                motion_model=MotionModel.SIXDOF_MOTION,
                 init_velc=init_velc,
                 num_iterations=100
             )
@@ -254,62 +249,54 @@ def run_train_phase(
                     "v_init": v_gt_noisy,
                     "v_opt": v_opt,
                     "v_gt": v_gt_norm,
-                    # "w_his": w_his[:20],
-                    # "w_init": w_gt_noisy,
-                    # "w_opt": w_opt,
+                    "w_his": w_his[:20],
+                    "w_init": w_gt_noisy,
+                    "w_opt": w_opt,
                     "w_gt": w_gt, 
                     "err_his": err_his[:20]
                 }
                 misc.save_theseus_result_as_text(theseus_result, config["logger"]["results_dir"])
 
             v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt, v_gt_norm)
-            # w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
+            w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
             v_mag_error = vector_math.vector_mag_error(v_opt, v_gt_norm)
-            # w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
+            w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
             
             # Motion loss
-            w_opt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
+            # w_opt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
             ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
-                    
+            
             # Total loss
-            alpha, beta, gamma = 1, 1, 5
+            alpha, beta, gamma = 1, 1, 100 
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
-            scaled_ssl_dec_loss = 180 * ssl_average_dec_loss
+            scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
             
-            # if(j<500):
-            #     total_loss = - (scaled_grad_loss + scaled_var_loss)
-            # else:
-            #     total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_motion_loss
-            
-            # if(j<200):
-            #     total_loss = (1.0 / scaled_grad_loss)
-            # else:
-            #     total_loss = (1.0 / scaled_grad_loss) + scaled_motion_loss
-            
-            if(j<200):
+            if(j<1000):
                 total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
             else:
                 total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) + scaled_ssl_dec_loss
-            # total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
             
             # step
             total_loss.backward()
             optimizer.step()
             
-            # update lr
-            for param_group in optimizer.param_groups:
-                param_group['lr'] *= decay_factor
             iter+=1  
             
+            mlp_grad_norm = 0
+            for p in warpper.flow_field.parameters():
+                if p.grad is not None:
+                    mlp_grad_norm += p.grad.data.norm(2).item() ** 2
+            
+            wandb_logger.write("mlp_grad_norm", mlp_grad_norm)
             wandb_logger.write("var_loss", scaled_var_loss.item())
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
             wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
             wandb_logger.write("v_dir_error", v_dir_error.item())
-            # wandb_logger.write("w_dir_error", w_dir_error.item())
+            wandb_logger.write("w_dir_error", w_dir_error.item())
             wandb_logger.write("v_mag_error", v_mag_error.item())
-            # wandb_logger.write("w_mag_error", w_mag_error.item())
+            wandb_logger.write("w_mag_error", w_mag_error.item())
             wandb_logger.update_buffer()
         
             # valid
@@ -441,9 +428,3 @@ if __name__ == "__main__":
     torch.save(trained_flow_field.state_dict(), log_model_path)
     
     wandb_logger.finish()
-    
-    
-    
-
-
-    
