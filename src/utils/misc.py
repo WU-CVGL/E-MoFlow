@@ -192,3 +192,66 @@ def plot_velocity(lin_vel_array, ang_vel_array, save_dir, prefix_filename):
 
     _plot_single(lin_vel_array, "linear")
     _plot_single(ang_vel_array, "angular")
+    
+def visualize_velocities(
+    gt_lin_vel, gt_ang_vel,
+    eval_lin_vel, eval_ang_vel,
+    t_eval
+):
+    # tensor2array
+    def to_numpy(tensor):
+        return tensor.cpu().numpy() if isinstance(tensor, torch.Tensor) else tensor
+    
+    gt_lin = to_numpy(gt_lin_vel)
+    gt_ang = to_numpy(gt_ang_vel)
+    eval_lin = to_numpy(eval_lin_vel)
+    eval_ang = to_numpy(eval_ang_vel)
+    time = to_numpy(t_eval).squeeze()
+    
+    # assert dim
+    N = gt_lin.shape[0]
+    assert time.ndim == 1, "t_eval must be 1-dimensional"
+    assert N == time.shape[0], f"Time dimension mismatch: t_eval has {time.shape[0]} elements but velocities have {N}"
+    
+    import warnings
+    warnings.filterwarnings("ignore", message="Blended transforms not yet supported")
+    
+    plot_config = {
+        'lw': 1.2,
+        'alpha': 0.8,
+    }
+    
+    # ================= 线速度可视化 =================
+    fig_lin, axs_lin = plt.subplots(3, 1, figsize=(12, 12))
+    components = ['X', 'Y', 'Z']
+    
+    for i, (ax, comp) in enumerate(zip(axs_lin, components)):
+        ax.plot(time, gt_lin[:, i], label='Ground Truth', color='#1f77b4', **plot_config)
+        ax.plot(time, eval_lin[:, i], label='Estimated', color='#ff7f0e', linestyle='--', **plot_config)
+        ax.set_title(f'Linear Velocity - {comp} Component', fontsize=12)
+        if(i==2):
+            ax.set_xlabel('Time (s)', fontsize=10)
+        ax.set_ylabel('Velocity (m/s)', fontsize=10)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+    
+    # plt.tight_layout()
+    fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
+    
+    # ================= 角速度可视化 =================
+    fig_ang, axs_ang = plt.subplots(3, 1, figsize=(12, 12))
+    
+    for i, (ax, comp) in enumerate(zip(axs_ang, components)):
+        ax.plot(time, gt_ang[:, i], label='Ground Truth', color='#2ca02c', **plot_config)
+        ax.plot(time, eval_ang[:, i], label='Estimated', color='#d62728', linestyle='--', **plot_config)
+        ax.set_title(f'Angular Velocity - {comp} Component', fontsize=12)
+        if(i==2):
+            ax.set_xlabel('Time (s)', fontsize=10)
+        ax.set_ylabel('Velocity (rad/s)', fontsize=10)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+    
+    # plt.tight_layout()
+    fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14)
+    
+    return fig_lin, fig_ang
