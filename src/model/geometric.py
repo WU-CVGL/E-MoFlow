@@ -139,7 +139,7 @@ class CubicBsplineVelocityModel(nn.Module):
     def forward(self, t):
         lin_vel = self.evaluate_velocity(t, self.lin_ctrl_knots)  # [N,3]
         lin_vel = lin_vel / torch.norm(lin_vel + 1e-9, p=2, dim=-1, keepdim=True)  # Normalize
-        ang_vel = self.evaluate_velocity(t, self.ang_ctrl_knots)
+        ang_vel = self.evaluate_velocity(t, self.ang_ctrl_knots)  # [N,3]
         return lin_vel, ang_vel
 
 from enum import Enum
