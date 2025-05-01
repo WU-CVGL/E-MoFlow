@@ -143,7 +143,7 @@ def run_train_phase(
     gt_ang_vel_all = torch.from_numpy(gt_ang_vel_array).clone().to(device)
     gt_lin_vel_spline = pose.create_vel_cspline(gt_lin_vel_all)
     gt_ang_vel_spline = pose.create_vel_cspline(gt_ang_vel_all)
-    
+
     # generate coordinates on image plane
     intrinsic_mat = torch.from_numpy(dataset.intrinsic).clone()
     pixel2cam_converter = Pixel2Cam(
@@ -152,7 +152,6 @@ def run_train_phase(
         device
     )
     image_coords = pixel2cam_converter.generate_image_coordinate()
-    norm_image_coords = pixel2cam_converter.generate_normalized_image_coordinate()
     
     # Split events stream 
     eval_frame_timestamp_list = dataset.eval_frame_time_list()
@@ -297,6 +296,7 @@ def run_train_phase(
             sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
             sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
             
+            # differential epipolar constrain
             t_min, t_max = torch.min(batch_events_txy[..., 0]), torch.max(batch_events_txy[..., 0])
             interp_t = (t_ref - t_min) / (t_max - t_min)
             lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
@@ -304,12 +304,12 @@ def run_train_phase(
                 sample_norm_coords, sample_norm_flow, 
                 lin_vel, ang_vel
             )
-            v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
-            v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
-            gt_dec_error, gt_average_dec_loss = differential_epipolar_constrain(
-                sample_norm_coords, sample_norm_flow, 
-                v_gt, w_gt
-            )
+            # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
+            # v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
+            # gt_dec_error, gt_average_dec_loss = differential_epipolar_constrain(
+            #     sample_norm_coords, sample_norm_flow, 
+            #     v_gt, w_gt
+            # )
                     
             # # get gt velocity
             # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
@@ -319,14 +319,14 @@ def run_train_phase(
             # # w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
             # dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
             
-            if(j % 100 == 0):
-                hist_figure = metric.analyze_error_histogram(gt_dec_error)
-                if(isinstance(hist_figure, mpl_fig.Figure)):
-                    wandb_logger.write_img("error_distribution", hist_figure)
-                    hist_figure_save_dir = config["logger"]["results_dir"]
-                    hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
-                    hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
-                    plt.close(hist_figure)
+            # if(j % 100 == 0):
+            #     hist_figure = metric.analyze_error_histogram(gt_dec_error)
+            #     if(isinstance(hist_figure, mpl_fig.Figure)):
+            #         wandb_logger.write_img("error_distribution", hist_figure)
+            #         hist_figure_save_dir = config["logger"]["results_dir"]
+            #         hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
+            #         hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
+            #         plt.close(hist_figure)
 
             # # intial value for differential epipolar constrain
             # v_noise_level = 0.1
@@ -369,12 +369,12 @@ def run_train_phase(
             # ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
             
             # Total loss
-            alpha, beta, gamma = 1, 1, 1
+            alpha, beta, gamma = 1, 1, 0.5   # 0.5
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
             scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
             
-            if(j<1000):
+            if(j<=200):
                 total_loss = - (scaled_grad_loss + scaled_var_loss)
             else:
                 total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_ssl_dec_loss
@@ -387,6 +387,7 @@ def run_train_phase(
             spline_scheduler.step()
             iter+=1  
             
+            # gradient 
             mlp_grad_norm = 0
             for p in warpper.flow_field.parameters():
                 if p.grad is not None:
@@ -406,13 +407,13 @@ def run_train_phase(
             wandb_logger.update_buffer()
         
             # valid
-            if(j % 100 == 0):
+            if(iter % 100 == 0):
                 time_analyzer.start_valid()
                 with torch.no_grad():
+                    # warp events by trained flow
                     valid_events = valid_events_origin.clone()
                     valid_events = valid_events[:, [2, 1, 0, 3]] # (y, x, t, p) ——> (t, x, y, p)
                     valid_events_txy = valid_events[:, :3]
-                    
                     valid_ref = warpper.get_reference_time(valid_events_txy, "max")
                     warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
                     
@@ -422,10 +423,11 @@ def run_train_phase(
                     warped_valid_events = torch.cat((warped_valid_events_txy[..., [1,2,0]], valid_polarity), dim=2).to(device)
                     warped_valid_events = warped_valid_events[...,[1,0,2,3]]
                     
-                    # log
+                    # save image warped event 
                     valid_warped_iwe = viz.create_clipped_iwe_for_visualization(warped_valid_events)
                     viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_"+ str(i))
                     
+                    # calculate dense optical flow 
                     flow_calculator = DenseOpticalFlowCalc(
                         grid_size=image_size, 
                         intrinsic_mat = intrinsic_mat,
@@ -433,19 +435,39 @@ def run_train_phase(
                         normalize_coords_mode="None",
                         device=device
                     )
+                    
+                    # visualize dense optical flow
                     t_start = eval_frame_timestamp_list[i] - dataset.min_ts
                     t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_ts
-                    duration  = t_end - t_start
-                    
                     pred_flow = flow_calculator.integrate_flow(t_start, t_end) # [H*W , 2]
                     pred_flow = pred_flow.cpu().numpy()
-                    
                     viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
                     
+                    # calculate optical flow error
                     pred_flow = torch.from_numpy(pred_flow).unsqueeze(0).to(device)
                     gt_flow_tensor = torch.from_numpy(gt_flow).unsqueeze(0).to(device)
                     event_mask = imager.create_eventmask(valid_events_origin).to(device)
                     flow_error, _ = metric.calculate_flow_error(gt_flow_tensor, pred_flow, event_mask=event_mask)  # type: ignore
+                    
+                    # calculate motion error
+                    t_eval = torch.linspace(start=t_start, end=t_end, steps=100).to(device)
+                    gt_lin_vel, gt_ang_vel = gt_lin_vel_spline.evaluate(t_eval), gt_ang_vel_spline.evaluate(t_eval)
+                    t_eval_norm = torch.linspace(start=0, end=1, steps=100).to(device)
+                    eval_lin_vel, eval_ang_vel = motion_spline.forward(t_eval_norm)
+                    mag_gt_lin_vel = torch.norm(gt_lin_vel, p=2, dim=1, keepdim=True)
+                    eval_lin_vel = eval_lin_vel * mag_gt_lin_vel
+                    
+                    # plot velocity        
+                    fig_lin, fig_ang =  misc.visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
+                    wandb_logger.write_img("linear_velocity_comparision", fig_lin)
+                    wandb_logger.write_img("angular_velocity_comparision", fig_ang)
+                    figure_save_dir = config["logger"]["results_dir"]
+                    lin_vel_figure_save_path = os.path.join(figure_save_dir, f"linear_velocity_comparison_{iter}.png")
+                    ang_vel_figure_save_path = os.path.join(figure_save_dir, f"angular_velocity_comparison_{iter}.png")
+                    fig_lin.savefig(lin_vel_figure_save_path, dpi=300, bbox_inches="tight")
+                    fig_ang.savefig(ang_vel_figure_save_path, dpi=300, bbox_inches="tight")
+                    plt.close(fig_lin)
+                    plt.close(fig_ang)
                     
                     epe.append(flow_error["EPE"].item())
                     ae.append(flow_error["AE"].item())
