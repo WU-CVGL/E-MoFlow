@@ -115,6 +115,33 @@ class Pixel2Cam:
         # [1, n_samples, 3]
         return sampled_coords.unsqueeze(0)
 
+class CubicBsplineVelocityModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.lin_ctrl_knots = nn.Parameter(torch.randn(4, 3))  
+        self.ang_ctrl_knots = nn.Parameter(torch.randn(4, 3))  
+        nn.init.normal_(self.lin_ctrl_knots, mean=0, std=0.1)
+        nn.init.normal_(self.ang_ctrl_knots, mean=0, std=0.1)
+
+    def cubic_bspline_basis(self, t):
+        t = t.clamp(0.0, 1.0)
+        return torch.stack([
+            (-t**3 + 3*t**2 - 3*t + 1) / 6,
+            (3*t**3 - 6*t**2 + 4) / 6,
+            (-3*t**3 + 3*t**2 + 3*t + 1) / 6,
+            t**3 / 6
+        ], dim=1)  # [N,4]
+
+    def evaluate_velocity(self, t, ctrl_points):
+        basis = self.cubic_bspline_basis(t)        # [N,4]
+        return torch.mm(basis, ctrl_points)       # [N,3]
+
+    def forward(self, t):
+        lin_vel = self.evaluate_velocity(t, self.lin_ctrl_knots)  # [N,3]
+        lin_vel = lin_vel / torch.norm(lin_vel + 1e-9, p=2, dim=-1, keepdim=True)  # Normalize
+        ang_vel = self.evaluate_velocity(t, self.ang_ctrl_knots)
+        return lin_vel, ang_vel
+
 from enum import Enum
 
 class MotionModel(Enum):

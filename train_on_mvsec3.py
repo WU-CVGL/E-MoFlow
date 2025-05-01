@@ -30,7 +30,7 @@ from src.loss.dec import differential_epipolar_constrain
 
 from src.model.warp import NeuralODEWarpV2
 from src.model.eventflow import EventFlowINR, DenseOpticalFlowCalc
-from src.model.geometric import Pixel2Cam, DiffEpipolarTheseusOptimizer, MotionModel
+from src.model.geometric import Pixel2Cam, DiffEpipolarTheseusOptimizer, MotionModel, CubicBsplineVelocityModel
 
 from src.utils.wandb import WandbLogger
 from src.utils.timer import TimeAnalyzer
@@ -96,6 +96,34 @@ def create_cosexp_scheduler(optimizer, lr_start, lr_end_cos, lr_end_exp, cos_ste
     
     # initiate optimizer
     optimizer.param_groups[0]['lr'] = lr_start
+    return LambdaLR(optimizer, lr_lambda)
+
+def create_exponential_scheduler(optimizer, lr1, lr2, total_steps):
+    assert lr1 > lr2 > 0, "Learning rates must satisfy lr_1 > lr_2 > 0"
+    assert total_steps > 0, "total_steps must be greater than 0"
+
+    def lr_lambda(current_step):
+        if current_step >= total_steps:
+            return lr2 / lr1  
+        decay_factor = (lr2 / lr1) ** (current_step / total_steps)
+        return decay_factor
+
+    optimizer.param_groups[0]['lr'] = lr1
+    return LambdaLR(optimizer, lr_lambda)
+
+def create_cosine_scheduler(optimizer, lr1, lr2, total_steps):
+    assert lr1 > lr2 > 0, "lr1 must be greater than lr2 and both must be positive"
+    assert total_steps > 0, "total_step must be a positive integer"
+
+    def lr_lambda(current_step):
+        if current_step >= total_steps:
+            return lr2 / lr1 
+        
+        cosine_decay = 0.5 * (1 + math.cos(math.pi * current_step / total_steps))
+        current_lr = lr2 + (lr1 - lr2) * cosine_decay
+        return current_lr / lr1 
+
+    optimizer.param_groups[0]['lr'] = lr1
     return LambdaLR(optimizer, lr_lambda)
 
 def run_train_phase(
@@ -176,20 +204,27 @@ def run_train_phase(
         misc.fix_random_seed()
         flow_field = EventFlowINR(model_config).to(device)
         warpper = NeuralODEWarpV2(flow_field, device, **warp_config)
-        dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
+        motion_spline = CubicBsplineVelocityModel().to(device)
+        # dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
         nn_optimizer = optim.Adam(warpper.flow_field.parameters())
+        spline_optimizer = optim.Adam(motion_spline.parameters())
         
-        # decay lr
+        # learning rate scheduler
         optimizer_config = config["optimizer"]
         num_epochs = optimizer_config["num_epoch"]
         
-        nn_scheduler = create_cosexp_scheduler(
+        nn_scheduler = create_cosine_scheduler(
             optimizer=nn_optimizer,
-            lr_start=optimizer_config["nn_lr_1"],
-            lr_end_cos=optimizer_config["nn_lr_2"],
-            lr_end_exp=optimizer_config["nn_lr_3"],
-            cos_steps=1000,
-            exp_steps=num_epochs - 1000
+            lr1=optimizer_config["nn_lr_1"],
+            lr2=optimizer_config["nn_lr_3"],
+            total_steps=num_epochs
+        )
+        
+        spline_scheduler = create_cosine_scheduler(
+            optimizer=spline_optimizer,
+            lr1=optimizer_config["spline_lr_1"],
+            lr2=optimizer_config["spline_lr_2"],
+            total_steps=num_epochs
         )
         
         print(f"Segment {i}")
@@ -198,7 +233,9 @@ def run_train_phase(
         for j in tqdm(range(num_epochs)):
             time_analyzer.start_epoch()
             
+            # reset optimizer
             nn_optimizer.zero_grad()
+            spline_optimizer.zero_grad()
             
             batch_events = valid_events_origin.clone() # (y, x, t, p)
             origin_iwe = imager.create_iwes(batch_events)
@@ -260,8 +297,20 @@ def run_train_phase(
             sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
             sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
             
-            
-            
+            t_min, t_max = torch.min(batch_events_txy[..., 0]), torch.max(batch_events_txy[..., 0])
+            interp_t = (t_ref - t_min) / (t_max - t_min)
+            lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
+            ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(
+                sample_norm_coords, sample_norm_flow, 
+                lin_vel, ang_vel
+            )
+            v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
+            v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
+            gt_dec_error, gt_average_dec_loss = differential_epipolar_constrain(
+                sample_norm_coords, sample_norm_flow, 
+                v_gt, w_gt
+            )
+                    
             # # get gt velocity
             # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
             # v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
@@ -270,14 +319,14 @@ def run_train_phase(
             # # w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
             # dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
             
-            # if(j % 100 == 0):
-            #     hist_figure = metric.analyze_error_histogram(dec_error)
-            #     if(isinstance(hist_figure, mpl_fig.Figure)):
-            #         wandb_logger.write_img("error_distribution", hist_figure)
-            #         hist_figure_save_dir = config["logger"]["results_dir"]
-            #         hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
-            #         hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
-            #         plt.close(hist_figure)
+            if(j % 100 == 0):
+                hist_figure = metric.analyze_error_histogram(gt_dec_error)
+                if(isinstance(hist_figure, mpl_fig.Figure)):
+                    wandb_logger.write_img("error_distribution", hist_figure)
+                    hist_figure_save_dir = config["logger"]["results_dir"]
+                    hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
+                    hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
+                    plt.close(hist_figure)
 
             # # intial value for differential epipolar constrain
             # v_noise_level = 0.1
@@ -320,20 +369,22 @@ def run_train_phase(
             # ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
             
             # Total loss
-            alpha, beta, gamma = 1, 1, 100 
+            alpha, beta, gamma = 1, 1, 1
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
-            # scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
+            scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
             
             if(j<1000):
-                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss)) 
+                total_loss = - (scaled_grad_loss + scaled_var_loss)
             else:
-                total_loss = (1.0 / (scaled_grad_loss + scaled_var_loss))
+                total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_ssl_dec_loss
             
             # step
             total_loss.backward()
             nn_optimizer.step()
             nn_scheduler.step()
+            spline_optimizer.step()
+            spline_scheduler.step()
             iter+=1  
             
             mlp_grad_norm = 0
@@ -341,11 +392,12 @@ def run_train_phase(
                 if p.grad is not None:
                     mlp_grad_norm += p.grad.data.norm(2).item() ** 2
             
-            wandb_logger.write("lr", nn_optimizer.param_groups[0]['lr'])
+            wandb_logger.write("nn_lr", nn_optimizer.param_groups[0]['lr'])
+            wandb_logger.write("spline_lr", spline_optimizer.param_groups[0]['lr'])
             wandb_logger.write("mlp_grad_norm", mlp_grad_norm)
             wandb_logger.write("var_loss", scaled_var_loss.item())
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
-            # wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
+            wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
             # wandb_logger.write("v_dir_error", v_dir_error.item())
             # wandb_logger.write("w_dir_error", w_dir_error.item())
