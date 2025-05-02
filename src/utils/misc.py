@@ -221,7 +221,7 @@ def visualize_velocities(
         'alpha': 0.8,
     }
     
-    # ================= 线速度可视化 =================
+    # plot linear velocities
     fig_lin, axs_lin = plt.subplots(3, 1, figsize=(12, 12))
     components = ['X', 'Y', 'Z']
     
@@ -234,11 +234,12 @@ def visualize_velocities(
         ax.set_ylabel('Velocity (m/s)', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
+        ax.set_ylim(-1,1)
     
     # plt.tight_layout()
     fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
     
-    # ================= 角速度可视化 =================
+    # plot angular velocities
     fig_ang, axs_ang = plt.subplots(3, 1, figsize=(12, 12))
     
     for i, (ax, comp) in enumerate(zip(axs_ang, components)):
@@ -250,8 +251,9 @@ def visualize_velocities(
         ax.set_ylabel('Velocity (rad/s)', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
+        ax.set_ylim(-0.5,0.5)
     
     # plt.tight_layout()
-    fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14)
+    fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14) 
     
     return fig_lin, fig_ang

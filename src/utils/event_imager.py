@@ -17,7 +17,7 @@ def is_numpy(arr: Any) -> bool:
 
 logger = logging.getLogger(__name__)
 
-class EventImageConverter(object):
+class EventImager(object):
     """Converter class of image into many different representations as an image.
 
     Args:
