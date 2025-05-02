@@ -7,7 +7,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from PIL import Image, ImageDraw, ImageFont
 from typing import Any, Dict, List, Optional
-from utils import event_imager
+from src.utils.event_imager import EventImager
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class Visualizer:
         self._image_size = image_shape  # H, W
         self._image_height = image_shape[0]
         self._image_width = image_shape[1]
-        self.imager = event_imager.EventImager(image_shape)
+        self.imager = EventImager(image_shape)
 
     def update_save_dir(self, new_dir: str) -> None:
         """Update save directiry. Creates it if not exist.
