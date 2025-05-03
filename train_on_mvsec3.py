@@ -1,6 +1,5 @@
 import os
 import sys
-import math
 import torch 
 import logging
 import numpy as np
@@ -9,7 +8,6 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from typing import Dict
-from torch.optim.lr_scheduler import LambdaLR
 
 from src.utils import (
     misc,
@@ -22,8 +20,7 @@ from src.utils import (
 from src.loader.MVSEC.loader import MVSECDataLoader
 
 from src.loss.focus import FocusLoss
-from src.loss.motion import MotionLoss
-from src.loss.dec import differential_epipolar_constrain
+from src.loss.dec import DifferentialEpipolarLoss
 
 from src.model.warp import NeuralODEWarpV2
 from src.model.eventflow import EventFlowINR, DenseOpticalFlowCalc
@@ -134,7 +131,7 @@ def run_train_phase(
         motion_spline = CubicBsplineVelocityModel().to(device)
         # dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
         nn_optimizer = optim.Adam(warpper.flow_field.parameters())
-        spline_optimizer = optim.Adam(motion_spline.parameters())
+        spline_optimizer = optim.Adam(motion_spline.parameters(), lr=config["optimizer"]["spline_lr_2"])
         
         # learning rate scheduler
         optimizer_config = config["optimizer"]
@@ -147,12 +144,12 @@ def run_train_phase(
             total_steps=num_epochs
         )
         
-        spline_scheduler = create_exponential_scheduler(
-            optimizer=spline_optimizer,
-            lr1=optimizer_config["spline_lr_1"],
-            lr2=optimizer_config["spline_lr_2"],
-            total_steps=num_epochs
-        )
+        # spline_scheduler = create_exponential_scheduler(
+        #     optimizer=spline_optimizer,
+        #     lr1=optimizer_config["spline_lr_1"],
+        #     lr2=optimizer_config["spline_lr_2"],
+        #     total_steps=num_epochs
+        # )
         
         print(f"Segment {i}")
         iter = 0
@@ -213,7 +210,7 @@ def run_train_phase(
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
                 coord_tensor=image_coords,
                 mask=events_mask,
-                n=1000
+                n=10000
             )
             t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
             sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
@@ -228,7 +225,7 @@ def run_train_phase(
             t_min, t_max = torch.min(batch_events_txy[..., 0]), torch.max(batch_events_txy[..., 0])
             interp_t = (t_ref - t_min) / (t_max - t_min)
             lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
-            ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(
+            ssl_dec_error, ssl_average_dec_loss = criterion["dec_criterion"](
                 sample_norm_coords, sample_norm_flow, 
                 lin_vel, ang_vel
             )
@@ -297,7 +294,7 @@ def run_train_phase(
             # ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
             
             # Total loss
-            alpha, beta, gamma = 1, 1, 2.5   # 0.5
+            alpha, beta, gamma = 1, 1, 2.5   # 2.5
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
             scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
@@ -312,7 +309,7 @@ def run_train_phase(
             nn_optimizer.step()
             nn_scheduler.step()
             spline_optimizer.step()
-            spline_scheduler.step()
+            # spline_scheduler.step()
             iter+=1  
             
             # gradient 
@@ -328,14 +325,9 @@ def run_train_phase(
             wandb_logger.write("grad_loss", scaled_grad_loss.item())
             wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
             wandb_logger.write("train_loss", total_loss.item())
-            # wandb_logger.write("v_dir_error", v_dir_error.item())
-            # wandb_logger.write("w_dir_error", w_dir_error.item())
-            # wandb_logger.write("v_mag_error", v_mag_error.item())
-            # wandb_logger.write("w_mag_error", w_mag_error.item())
-            wandb_logger.update_buffer()
         
             # valid
-            if(iter % 100 == 0):
+            if(iter % 1000 == 0 or iter == 1):
                 time_analyzer.start_valid()
                 with torch.no_grad():
                     # warp events by trained flow
@@ -405,10 +397,10 @@ def run_train_phase(
                     wandb_logger.write("1PE", flow_error["1PE"].item())
                     wandb_logger.write("2PE", flow_error["2PE"].item())
                     wandb_logger.write("3PE", flow_error["3PE"].item())
-                    wandb_logger.update_buffer()
                 
                 time_analyzer.end_valid()
                 time_analyzer.end_epoch()
+            wandb_logger.update_buffer()
     error_dict = {"EPE": np.mean(epe), "AE": np.mean(ae), "3PE": np.mean(out)}
     logger.info(f"Average EPE: {np.mean(epe)}")
     logger.info(f"Average AE: {np.mean(ae)}")
@@ -454,13 +446,14 @@ if __name__ == "__main__":
     )
     
     # instantiate criterion
-    grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
+    dec_criterion = DifferentialEpipolarLoss()
     var_criterion = FocusLoss(loss_type="variance", norm="l1")
-    motion_criterion = MotionLoss(loss_type="MSE")
+    grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
+    
     criterions = {
         "grad_criterion": grad_criterion, 
         "var_criterion": var_criterion,
-        "motion_criterion": motion_criterion
+        "dec_criterion": dec_criterion
     } 
 
     # time analysis
