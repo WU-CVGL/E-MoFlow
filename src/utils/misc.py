@@ -38,11 +38,13 @@ def fix_random_seed(seed_idx=42) -> None:
     random.seed(seed_idx)
     np.random.seed(seed_idx)
     torch.manual_seed(seed_idx)
+    torch.random.manual_seed(seed_idx)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed_idx)
         torch.cuda.manual_seed_all(seed_idx)  
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    os.environ["PYTHONHASHSEED"] = str(0)
 
 def load_camera_intrinsic(
     file_path: str
