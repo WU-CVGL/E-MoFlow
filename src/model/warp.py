@@ -1,18 +1,26 @@
 import torch
+import random
 import logging
 import torch.nn as nn
-from src.model.eventflow import EventFlowINR
-from torchdiffeq import odeint_adjoint
+
+from typing import Dict
 from torchdiffeq import odeint
-import random
+from torchdiffeq import odeint_adjoint
+from src.model.eventflow import EventFlowINR
 
 EPS = 1e-5
 
 logger = logging.getLogger(__name__)
 
 class NeuralODEWarp:
-    def __init__(self, flow_inr: EventFlowINR, device: torch.device, 
-                 tref_setting: str, num_step: int, solver: str) -> None:
+    def __init__(
+        self, 
+        flow_inr: EventFlowINR, 
+        device: torch.device, 
+        tref_setting: str, 
+        num_step: int, 
+        solver: str
+    ) -> None:
         self.flow_field = flow_inr       # calculate dy/dt
         self.device = device
         self.num_step = num_step
@@ -147,19 +155,32 @@ class ODEFunc(nn.Module):
             dt0dt,
             d_delta_t_dt
         ], dim=-1)
-
+       
 class NeuralODEWarpV2(nn.Module):
-    def __init__(self, flow_inr: EventFlowINR, device: torch.device, 
-                 tref_setting: str, solver: str = 'dopri5', rtol: float = 1e-7, 
-                 atol: float = 1e-9) -> None:
+    def __init__(
+        self, 
+        flow_inr: EventFlowINR, 
+        device: torch.device,
+        warp_config: dict
+    ) -> None:
         super().__init__()
-        self.ode_func = ODEFunc(flow_inr)  
         self.flow_field = flow_inr
+        self.ode_func = ODEFunc(flow_inr)  
         self.device = device
-        self.tref_setting = tref_setting
-        self.solver = solver
-        self.rtol = rtol
-        self.atol = atol
+                
+        required_keys = ["tref_setting", "solver", "step_size", "rtol", "atol"]
+        missing_keys = [key for key in required_keys if key not in warp_config]
+        if missing_keys:
+            raise ValueError(f"Missing required keys in warp_config: {missing_keys}")
+        
+        for key, value in warp_config.items():
+            setattr(self, key, value)
+            
+        self.tref_setting: str = warp_config["tref_setting"]
+        self.solver: str = warp_config["solver"]
+        self.step_size: float = warp_config["step_size"]
+        self.rtol: float = warp_config["rtol"]
+        self.atol: float = warp_config["atol"]
         
     def get_reference_time(self, batch_txy: torch.Tensor, tref_setting: str):
         """
@@ -206,10 +227,7 @@ class NeuralODEWarpV2(nn.Module):
         return augmented_state
     
     def warp_events(self, batch_txy: torch.Tensor, t_ref: torch.Tensor):
-        # t_ref = self.get_reference_time(batch_txy, tref_setting)
-        
         augmented_init = self._build_augmented_state(batch_txy, t_ref)
-        
         t_eval = torch.tensor([0.0, 1.0], device=self.device)
         
         solution = odeint(
@@ -218,7 +236,7 @@ class NeuralODEWarpV2(nn.Module):
             t_eval,
             method=self.solver,
             options={
-                "step_size": 1
+                "step_size": self.step_size
             },
             rtol=self.rtol,
             atol=self.atol
@@ -228,6 +246,6 @@ class NeuralODEWarpV2(nn.Module):
         warped_spatial = final_state[:, :2]
         
         return torch.cat([
-            t_ref.expand(batch_txy.size(0)).unsqueeze(-1),  # 保持时间维度
+            t_ref.expand(batch_txy.size(0)).unsqueeze(-1),  
             warped_spatial
         ], dim=-1)

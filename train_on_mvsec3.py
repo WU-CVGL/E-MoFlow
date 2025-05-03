@@ -24,12 +24,7 @@ from src.loss.dec import DifferentialEpipolarLoss
 
 from src.model.warp import NeuralODEWarpV2
 from src.model.eventflow import EventFlowINR, DenseOpticalFlowCalc
-from src.model.geometric import (
-    Pixel2Cam,
-    MotionModel,
-    CubicBsplineVelocityModel,
-    DiffEpipolarTheseusOptimizer
-)
+from src.model.geometric import Pixel2Cam, CubicBsplineVelocityModel
 from src.model.scheduler import create_exponential_scheduler
 
 from src.utils.wandb import WandbLogger
@@ -127,7 +122,7 @@ def run_train_phase(
         # reset model
         misc.fix_random_seed()
         flow_field = EventFlowINR(model_config).to(device)
-        warpper = NeuralODEWarpV2(flow_field, device, **warp_config)
+        warpper = NeuralODEWarpV2(flow_field, device, warp_config)
         motion_spline = CubicBsplineVelocityModel().to(device)
         # dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
         nn_optimizer = optim.Adam(warpper.flow_field.parameters())

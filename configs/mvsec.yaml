@@ -15,7 +15,7 @@ data:
 
 logger:
   project: mvsec_indoor_flying_1_test_spline
-  expname: cmax_1e-46_dec_1e-2_weight_2.5_total_iter_10000_exp
+  expname: cmax_ode_euler_step_10_1e-46_dec_1e-2_weight_2.5_total_iter_10000_exp
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
@@ -34,5 +34,6 @@ optimizer:
 warp:
   tref_setting: "random"
   solver: "euler"
+  step_size: 10
   rtol: 1.0e-7
   atol: 1.0e-9
