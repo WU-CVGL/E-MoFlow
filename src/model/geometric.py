@@ -4,7 +4,7 @@ import theseus as th
 import torch.nn as nn
 
 from typing import Optional, Tuple, cast
-from src.utils.vector_math import vector_to_skew_matrix
+from src.utils.vector_math import vec2skewmat
 
 class Pixel2Cam:
     def __init__(self, H: int, W: int, K: torch.Tensor, device: torch.device):
@@ -172,8 +172,8 @@ class DiffEpipolarTheseusOptimizer:
         
         x_batch_tensor = x_batch_tensor.squeeze(0).transpose(0,1) # [3,N]
         u_batch_tensor = u_batch_tensor.squeeze(0).transpose(0,1) # [3,N]
-        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)   # [3,3]
-        w_skew = vector_to_skew_matrix(w_vec_tensor).squeeze(0)   # [3,3]
+        v_skew = vec2skewmat(v_vec_tensor).squeeze(0)   # [3,3]
+        w_skew = vec2skewmat(w_vec_tensor).squeeze(0)   # [3,3]
         
         s = 0.5 * (torch.mm(v_skew, w_skew) + torch.mm(w_skew, v_skew))
         
@@ -205,7 +205,7 @@ class DiffEpipolarTheseusOptimizer:
         
         x_batch_tensor = x_batch_tensor.squeeze(0).transpose(0,1)  # [3,N]
         u_batch_tensor = u_batch_tensor.squeeze(0).transpose(0,1)  # [3,N]
-        v_skew = vector_to_skew_matrix(v_vec_tensor).squeeze(0)    # [3,3]
+        v_skew = vec2skewmat(v_vec_tensor).squeeze(0)    # [3,3]
         
         term1 = torch.einsum("in,ij,jn->n", u_batch_tensor, v_skew, x_batch_tensor)  # shape (N,)
         error = term1.unsqueeze(0)

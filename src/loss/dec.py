@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from src.utils.vector_math import vector_to_skew_matrix
+from src.utils.vector_math import vec2skewmat
 
 class DifferentialEpipolarLoss(nn.Module):
     def __init__(self):
@@ -20,8 +20,8 @@ class DifferentialEpipolarLoss(nn.Module):
             average_dec_loss: Scalar mean loss
         """
         # Convert velocities to skew-symmetric matrices
-        v_skew = vector_to_skew_matrix(lin_vel).squeeze(0)  # (3, 3)
-        w_skew = vector_to_skew_matrix(ang_vel).squeeze(0)  # (3, 3)
+        v_skew = vec2skewmat(lin_vel).squeeze(0)  # (3, 3)
+        w_skew = vec2skewmat(ang_vel).squeeze(0)  # (3, 3)
         x_batch_tensor = coord.squeeze(0).transpose(0,1) # [3,N]
         u_batch_tensor = flow.squeeze(0).transpose(0,1) # [3,N]
         

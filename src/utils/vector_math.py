@@ -28,7 +28,7 @@ def vector_mag_error(v1: torch.Tensor, v2: torch.Tensor, use_abs: bool = True) -
     
     return diff.squeeze()
 
-def vector_to_skew_matrix(vec):
+def vec2skewmat(vec):
     if len(vec.shape) == 1:
         vec = vec.unsqueeze(0)
         mat = kornia.geometry.conversions.vector_to_skew_symmetric_matrix(vec).squeeze(0)
