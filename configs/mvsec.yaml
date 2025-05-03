@@ -6,10 +6,7 @@ data:
   sequence: "indoor_flying1"
   hight: 260
   width: 346
-  window_size_ratio: 0.02  # 每个batch覆盖2%的总时间
-  step_size_ratio: 0.01   # 每次移动1%，相邻窗口有50%重叠
-  # sequence_indices: [0,99]
-  # batch_range: 15
+  eval_dt: 4
   loader:
     num_workers: 16
     batch_size: 32
@@ -17,8 +14,8 @@ data:
     pin_memory: True
 
 logger:
-  project: mvsec_indoor_flying_1
-  expname: train_based_CMax_norm_pixel_idx_1402
+  project: mvsec_indoor_flying_1_test_spline
+  expname: cmax_1e-46_dec_1e-2_weight_2.5_total_iter_10000_exp
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
@@ -27,16 +24,15 @@ model:
   multires: 2
 
 optimizer:
-  initial_lrate: 1.0e-4
-  final_lrate: 1.0e-6
-  num_epoch: 1000
+  nn_lr_1: 1.0e-4
+  nn_lr_2: 1.0e-5
+  nn_lr_3: 1.0e-6
+  spline_lr_1: 1.0e-1
+  spline_lr_2: 1.0e-2
+  num_epoch: 10000
 
 warp:
-  num_step: 3
   tref_setting: "random"
   solver: "euler"
-  # rtol: 1.0e-3
-  # atol: 1.0e-4
-
-valid: 
-  file_idx: [0,99]
+  rtol: 1.0e-7
+  atol: 1.0e-9
