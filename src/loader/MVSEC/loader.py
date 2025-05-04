@@ -228,7 +228,7 @@ class MVSECDataLoader(DataLoaderBase):
         logger.info(f"Filter and obtain {len(self.left_gray_ts)} valid images.")
         logger.info(f"Filter and obtain {len(self.gt_timestamps)} valid ground truth flow.")
         logger.info(f"Filter and obtain {len(self.gt_timestamps)} valid ground truth motion.")
-        logger.info(f"The average frame interval of grayscale images is {np.mean(self.left_gray_ts_dt)}.")
+        logger.info(f"The average frame interval of grayscale images is {np.mean(self.left_gray_ts_dt)}s.")
 
         # self.right_event = self.right_event[first_event_index:last_event_index]
         # self.right_ts = self.right_ts[first_event_index:last_event_index]
