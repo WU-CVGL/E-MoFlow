@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from typing import Dict
+from dataclasses import dataclass
 
 from src.utils import (
     misc,
@@ -23,7 +24,7 @@ from src.loss.focus import FocusLoss
 from src.loss.dec import DifferentialEpipolarLoss
 
 from src.model.warp import NeuralODEWarpV2
-from src.model.eventflow import EventFlowINR, DenseOpticalFlowCalc
+from src.model.eventflow import EventFlowINR, DenseFlowExtractor
 from src.model.geometric import Pixel2Cam, CubicBsplineVelocityModel
 from src.model.scheduler import create_exponential_scheduler
 
@@ -46,24 +47,150 @@ logger = logging.getLogger(__name__)
 
 torch.set_float32_matmul_precision('high')
 
-def run_train_phase(
-    args, 
-    config: Dict, 
-    dataset: MVSECDataLoader,
-    criterion: Dict,
-    imager: EventImager,
-    viz: Visualizer,
-    wandb_logger: WandbLogger,
-    time_analyzer: TimeAnalyzer,
-    device: torch.device
-):  
-    # load gt velocity
+@dataclass
+class Tools:
+    viz: Visualizer
+    imager: EventImager
+    wandb_logger: WandbLogger
+    time_analyzer: TimeAnalyzer
+
+def get_gt_motion_spline(dataset: MVSECDataLoader):
     gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
     gt_lin_vel_all = torch.from_numpy(gt_lin_vel_array).clone().to(device)
     gt_ang_vel_all = torch.from_numpy(gt_ang_vel_array).clone().to(device)
     gt_lin_vel_spline = pose.create_vel_cspline(gt_lin_vel_all)
     gt_ang_vel_spline = pose.create_vel_cspline(gt_ang_vel_all)
+    return gt_lin_vel_spline, gt_ang_vel_spline
+    
+def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
+    eval_dt = config["data"]["eval_dt"]
+    eval_frame_timestamp_list = dataset.eval_frame_time_list()
+    total_batch_events = []
+    total_batch_gt_flow = []
+    
+    gt_flow_save_dir = os.path.join(config["logger"]["results_dir"], "gt_flow")
+    origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
+    
+    for i1 in tqdm(
+        range(len(eval_frame_timestamp_list) - eval_dt), 
+        desc=f"Divide the event stream into {eval_dt}-frame intervals", leave=True
+    ):  
+        t1 = eval_frame_timestamp_list[i1]
+        t2 = eval_frame_timestamp_list[i1 + eval_dt]
+    
+        ind1, ind2 = dataset.time_to_index(t1), dataset.time_to_index(t2)
+        batch_events = dataset.load_event(ind1, ind2)
+        batch_events[...,2] -= dataset.min_ts   # norm_t
+        gt_flow = dataset.load_optical_flow(t1, t2)
+        
+        batch_events_tensor = torch.tensor(batch_events, dtype=torch.float32).to(device)
+        batch_events_iwe = viz.create_clipped_iwe_for_visualization(batch_events_tensor)
+        viz.update_save_dir(origin_iwe_save_dir)
+        viz.visualize_image(batch_events_iwe.squeeze(0), file_prefix="origin_iwe_")
+        
+        gt_flow = np.transpose(gt_flow, (2, 0, 1))  # [2, H, W]
+        viz.update_save_dir(gt_flow_save_dir)
+        viz.visualize_optical_flow(
+            gt_flow[0],
+            gt_flow[1],
+            visualize_color_wheel=True,
+            file_prefix="gt_flow_"
+        )
+        
+        total_batch_events.append(batch_events)
+        total_batch_gt_flow.append(gt_flow)
+        
+    return total_batch_events, total_batch_gt_flow
 
+def run_valid_phase(
+    config: Dict,  
+    segment_index: int,
+    events_origin: torch.Tensor,
+    gt_flow: torch.Tensor,
+    gt_motion: Dict,
+    warpper: NeuralODEWarpV2,
+    motion_spline: CubicBsplineVelocityModel,
+    flow_calculator: DenseFlowExtractor,
+    tools: Tools,
+    device: torch.device
+):
+    pred_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "pred_iwe")
+    pred_flow_save_dir = os.path.join(config["logger"]["results_dir"], "pred_flow")
+    motion_save_dir = os.path.join(config["logger"]["results_dir"], "motion")
+    if not os.path.exists(motion_save_dir):
+        os.makedirs(motion_save_dir)
+        
+    tools.time_analyzer.start_valid()
+    with torch.no_grad():
+        # warp events by trained flow
+        valid_events = events_origin.clone()
+        valid_events_txy = valid_events[:, [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
+        valid_ref = warpper.get_reference_time(valid_events_txy, "max")
+        warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
+        
+        # create image warped event 
+        num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]       
+        valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
+        warped_valid_events = torch.cat((warped_valid_events_txy[..., [2,1,0]], valid_polarity), dim=2).to(device)
+        
+        # save image warped event 
+        valid_warped_iwe = tools.viz.create_clipped_iwe_for_visualization(warped_valid_events)
+        tools.viz.update_save_dir(pred_iwe_save_dir)
+        tools.viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_")
+        
+        # calculate optical flow error
+        t_start = torch.min(valid_events_txy[:, 0])
+        t_end = torch.max(valid_events_txy[:, 0])
+        pred_flow = flow_calculator.integrate_flow(warpper.flow_field, t_start, t_end).unsqueeze(0) # [B,2,H,W]
+        gt_flow = gt_flow.unsqueeze(0).to(device) # [B,2,H,W]
+        event_mask = tools.imager.create_eventmask(valid_events).to(device)
+        flow_error, _ = metric.calculate_flow_error(gt_flow, pred_flow, event_mask=event_mask)  # type: ignore
+        
+        # visualize dense optical flow
+        pred_flow = pred_flow.squeeze(0).cpu().numpy()
+        tools.viz.update_save_dir(pred_flow_save_dir)
+        tools.viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events.cpu().numpy(), file_prefix="pred_flow_masked_")
+        
+        # calculate motion error
+        gt_lin_vel_spline, gt_ang_vel_spline = gt_motion["linear_velocity"], gt_motion["angular_velocity"]
+        t_eval = torch.linspace(start=t_start, end=t_end, steps=100).to(device)
+        gt_lin_vel, gt_ang_vel = gt_lin_vel_spline.evaluate(t_eval), gt_ang_vel_spline.evaluate(t_eval)
+        t_eval_norm = torch.linspace(start=0, end=1, steps=100).to(device)
+        eval_lin_vel, eval_ang_vel = motion_spline.forward(t_eval_norm)
+        mag_gt_lin_vel = torch.norm(gt_lin_vel, p=2, dim=1, keepdim=True)
+        eval_lin_vel = eval_lin_vel * mag_gt_lin_vel
+        
+        # plot velocity        
+        fig_lin, fig_ang = misc.visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
+        lin_vel_figure_save_path = os.path.join(motion_save_dir, f"linear_velocity_comparison_{str(segment_index)}.png")
+        ang_vel_figure_save_path = os.path.join(motion_save_dir, f"angular_velocity_comparison_{str(segment_index)}.png")
+        fig_lin.savefig(lin_vel_figure_save_path, dpi=300, bbox_inches="tight")
+        fig_ang.savefig(ang_vel_figure_save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig_lin)
+        plt.close(fig_ang)
+    
+    tools.time_analyzer.end_valid()
+    
+    return flow_error
+    
+def run_train_phase(
+    config: Dict, 
+    dataset: MVSECDataLoader,
+    criterion: Dict,
+    tools: Tools,
+    device: torch.device
+):  
+    model_config = config["model"]
+    warp_config = config["warp"]
+    optimizer_config = config["optimizer"]
+    
+    # get gt motion spline
+    gt_lin_vel_spline, gt_ang_vel_spline = get_gt_motion_spline(dataset)
+    gt_motion = {
+        "linear_velocity": gt_lin_vel_spline,
+        "angular_velocity": gt_ang_vel_spline
+    }
+    
     # generate coordinates on image plane
     intrinsic_mat = torch.from_numpy(dataset.intrinsic).clone()
     pixel2cam_converter = Pixel2Cam(
@@ -72,135 +199,72 @@ def run_train_phase(
         device
     )
     image_coords = pixel2cam_converter.generate_image_coordinate()
+    flow_calculator = DenseFlowExtractor(grid_size=image_size, device=device)
     
-    # Split events stream 
-    eval_frame_timestamp_list = dataset.eval_frame_time_list()
-    eval_dt_list = [4]
-    gt_dt = 4
-    total_batch_events = []
-    total_gt_flow = []
+    # split events
+    total_batch_events, total_batch_gt_flow = split_events(config=config, dataset=dataset, viz=tools.viz)
+    total_batch_events, total_batch_gt_flow = total_batch_events[397:412], total_batch_gt_flow[397:412]
     
-    for eval_dt in tqdm(eval_dt_list, desc=f"Split the events into batches for validation", leave=True):
-        for i1 in tqdm(
-            range(len(eval_frame_timestamp_list) - eval_dt), 
-            desc=f"Divide the event stream into {eval_dt}-frame intervals", leave=True
-        ):  
-            t1 = eval_frame_timestamp_list[i1]
-            t2 = eval_frame_timestamp_list[i1 + eval_dt]
-            gt_t1 = eval_frame_timestamp_list[i1]
-            gt_t2 = eval_frame_timestamp_list[i1 + gt_dt]
-            
-            gt_flow = dataset.load_optical_flow(gt_t1, gt_t2)
-            ind1 = dataset.time_to_index(t1)  # event index
-            ind2 = dataset.time_to_index(t2)
-            batch_events = dataset.load_event(ind1, ind2)
-            batch_events[...,2] -= dataset.min_ts # norm_t
-            total_batch_events.append(batch_events)
-            total_gt_flow.append(gt_flow)
-
     epe = []
     ae = []
-    out = []
-    
+    out =[]
     for i in tqdm(range(len(total_batch_events))):
-        if(i!=1825): # 1825
-            continue
-        
-        valid_events_origin = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
-        valid_origin_iwe = viz.create_clipped_iwe_for_visualization(valid_events_origin)
-        viz.visualize_image(valid_origin_iwe.squeeze(0), file_prefix="origin_iwe_" + str(i))
-        
-        gt_flow = total_gt_flow[i]
-        gt_flow = np.transpose(gt_flow, (2, 0, 1))  # [2, H, W]
-        viz.visualize_optical_flow(
-            gt_flow[0],
-            gt_flow[1],
-            visualize_color_wheel=True,
-            file_prefix="gt_flow" + str(i),
-        )
-
         # reset model
-        misc.fix_random_seed()
         flow_field = EventFlowINR(model_config).to(device)
         warpper = NeuralODEWarpV2(flow_field, device, warp_config)
         motion_spline = CubicBsplineVelocityModel().to(device)
-        # dec_theseus_optimizer = DiffEpipolarTheseusOptimizer(image_size, device)
         nn_optimizer = optim.Adam(warpper.flow_field.parameters())
-        spline_optimizer = optim.Adam(motion_spline.parameters(), lr=config["optimizer"]["spline_lr_2"])
+        spline_optimizer = optim.Adam(motion_spline.parameters(), lr=optimizer_config["spline_lr"])
         
         # learning rate scheduler
-        optimizer_config = config["optimizer"]
-        num_epochs = optimizer_config["num_epoch"]
-        
+        num_iters = optimizer_config["num_iters"]
         nn_scheduler = create_exponential_scheduler(
             optimizer=nn_optimizer,
-            lr1=optimizer_config["nn_lr_1"],
-            lr2=optimizer_config["nn_lr_3"],
-            total_steps=num_epochs
+            lr1=optimizer_config["nn_initial_lr"],
+            lr2=optimizer_config["nn_final_lr"],
+            total_steps=num_iters
         )
         
-        # spline_scheduler = create_exponential_scheduler(
-        #     optimizer=spline_optimizer,
-        #     lr1=optimizer_config["spline_lr_1"],
-        #     lr2=optimizer_config["spline_lr_2"],
-        #     total_steps=num_epochs
-        # )
-        
+        # segment i
+        events_origin = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
+        gt_flow = torch.tensor(total_batch_gt_flow[i], dtype=torch.float32).to(device)
         print(f"Segment {i}")
+        
         iter = 0
-
-        for j in tqdm(range(num_epochs)):
-            time_analyzer.start_epoch()
-            
+        tools.time_analyzer.start_epoch()
+        for j in tqdm(range(num_iters)): 
             # reset optimizer
             nn_optimizer.zero_grad()
             spline_optimizer.zero_grad()
             
-            batch_events = valid_events_origin.clone() # (y, x, t, p)
-            origin_iwe = imager.create_iwes(batch_events)
-            batch_events = batch_events[..., [2, 1, 0, 3]]  # (t, x, y, p)
-            batch_events_txy = batch_events[:, :3]
-            
-            # get t_ref
+            # warp events by neural ode
+            batch_events = events_origin.clone() # (y, x, t, p)
+            batch_events_txy = batch_events[..., [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
             t_ref = warpper.get_reference_time(batch_events_txy, warp_config["tref_setting"])
-
-            # warp by neural ode 
             warped_events_txy = warpper.warp_events(batch_events_txy, t_ref).unsqueeze(0)
 
             # create image warped event    
             num_iwe, num_events = warped_events_txy.shape[0], warped_events_txy.shape[1]
             polarity = batch_events[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1)
-            warped_events = torch.cat((warped_events_txy[..., [1,2,0]], polarity), dim=2).to(device)
-            warped_events = warped_events[...,[1,0,2,3]] # (x,y,t,p) ——> (y,x,t,p)
+            warped_events = torch.cat((warped_events_txy[..., [2,1,0]], polarity), dim=2).to(device) # (t, x, y) ——> (y,x,t,p)
             
             # events should be reorganized as (y,x,t,p) that can processed by create_iwes
-            iwes = imager.create_iwes(
+            iwes = tools.imager.create_iwes(
                 events=warped_events,
                 method="bilinear_vote",
                 sigma=1,
                 blur=True
-            ) # [n,h,w] n can be one or multi
+            ) # [n,h,w] n should be one
             
             # CMax loss
             if num_iwe == 1:
                 var_loss = criterion["var_criterion"](iwes)
                 grad_loss = criterion["grad_criterion"](iwes)
             elif num_iwe > 1:
-                # var_loss = torch.Tensor([0]).to(device)
-                grad_loss_t_min = grad_criterion(iwes[0].unsqueeze(0))
-                grad_loss_t_mid = grad_criterion(iwes[len(iwes)//2].unsqueeze(0))
-                grad_loss_t_max = grad_criterion(iwes[-1].unsqueeze(0))
-                grad_loss_origin = grad_criterion(origin_iwe)
-                grad_loss = (grad_loss_t_min + grad_loss_t_max + 2 * grad_loss_t_mid) / 4 * grad_loss_origin
-                
-                var_loss_t_min = var_criterion(iwes[0].unsqueeze(0))
-                var_loss_t_mid = var_criterion(iwes[len(iwes)//2].unsqueeze(0))
-                var_loss_t_max = var_criterion(iwes[-1].unsqueeze(0))
-                var_loss_origin = var_criterion(origin_iwe)
-                var_loss = (var_loss_t_min + var_loss_t_max + 2 * var_loss_t_mid) / 4 * var_loss_origin
+                raise ValueError("Multiple iwes are not supported")
             
             # sample coordinates
-            events_mask = imager.create_eventmask(warped_events)
+            events_mask = tools.imager.create_eventmask(warped_events)
             events_mask = events_mask[0].squeeze(0).to(device)
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
                 coord_tensor=image_coords,
@@ -231,63 +295,6 @@ def run_train_phase(
             #     v_gt, w_gt
             # )
                     
-            # # get gt velocity
-            # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
-            # v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
-            # v_gt_norm = v_gt / torch.norm(v_gt, p=2, dim=-1, keepdim=True)
-            
-            # # w_gt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
-            # dec_error, average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_gt, w_gt)
-            
-            # if(j % 100 == 0):
-            #     hist_figure = metric.analyze_error_histogram(gt_dec_error)
-            #     if(isinstance(hist_figure, mpl_fig.Figure)):
-            #         wandb_logger.write_img("error_distribution", hist_figure)
-            #         hist_figure_save_dir = config["logger"]["results_dir"]
-            #         hist_figure_save_path = os.path.join(hist_figure_save_dir, f"error_distribution_{j}.png")
-            #         hist_figure.savefig(hist_figure_save_path, dpi=300, bbox_inches="tight")
-            #         plt.close(hist_figure)
-
-            # # intial value for differential epipolar constrain
-            # v_noise_level = 0.1
-            # w_noise_level = 0.01
-            # v_gt_noisy = v_gt + v_noise_level * torch.randn_like(v_gt, device=v_gt.device)
-            # w_gt_noisy = w_gt + w_noise_level * torch.randn_like(w_gt, device=w_gt.device)
-            # v_gt_noisy = v_gt_noisy / torch.norm(v_gt_noisy, p=2, dim=-1, keepdim=True)
-            # init_velc = [v_gt_noisy, w_gt_noisy]
-            # # init_velc = [v_gt_noisy]
-            
-            # # theseus optimize 
-            # v_opt, w_opt, v_his, w_his, err_his = dec_theseus_optimizer.optimize(
-            #     sample_norm_coords, sample_norm_flow,  
-            #     motion_model=MotionModel.SIXDOF_MOTION,
-            #     init_velc=init_velc,
-            #     num_iterations=100
-            # )
-
-            # if(j>1000):
-            #     theseus_result = {
-            #         "v_his":v_his[:20],
-            #         "v_init": v_gt_noisy,
-            #         "v_opt": v_opt,
-            #         "v_gt": v_gt_norm,
-            #         "w_his": w_his[:20],
-            #         "w_init": w_gt_noisy,
-            #         "w_opt": w_opt,
-            #         "w_gt": w_gt, 
-            #         "err_his": err_his[:20]
-            #     }
-            #     misc.save_theseus_result_as_text(theseus_result, config["logger"]["results_dir"])
-
-            # v_dir_error = vector_math.vector_dir_error_in_degrees(v_opt, v_gt_norm)
-            # w_dir_error = vector_math.vector_dir_error_in_degrees(w_opt, w_gt)
-            # v_mag_error = vector_math.vector_mag_error(v_opt, v_gt_norm)
-            # w_mag_error = vector_math.vector_mag_error(w_opt, w_gt)
-            
-            # # Motion loss
-            # # w_opt = torch.tensor([0.0,0.0,0.0], dtype=torch.float32, device=device)
-            # ssl_dec_error, ssl_average_dec_loss = differential_epipolar_constrain(sample_norm_coords, sample_norm_flow, v_opt, w_opt)
-            
             # Total loss
             alpha, beta, gamma = 1, 1, 2.5   # 2.5
             scaled_grad_loss = alpha * grad_loss
@@ -304,132 +311,75 @@ def run_train_phase(
             nn_optimizer.step()
             nn_scheduler.step()
             spline_optimizer.step()
-            # spline_scheduler.step()
             iter+=1  
             
-            # gradient 
-            mlp_grad_norm = 0
-            for p in warpper.flow_field.parameters():
-                if p.grad is not None:
-                    mlp_grad_norm += p.grad.data.norm(2).item() ** 2
+            # # gradient 
+            # mlp_grad_norm = 0
+            # for p in warpper.flow_field.parameters():
+            #     if p.grad is not None:
+            #         mlp_grad_norm += p.grad.data.norm(2).item() ** 2
             
-            wandb_logger.write("nn_lr", nn_optimizer.param_groups[0]['lr'])
-            wandb_logger.write("spline_lr", spline_optimizer.param_groups[0]['lr'])
-            wandb_logger.write("mlp_grad_norm", mlp_grad_norm)
-            wandb_logger.write("var_loss", scaled_var_loss.item())
-            wandb_logger.write("grad_loss", scaled_grad_loss.item())
-            wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
-            wandb_logger.write("train_loss", total_loss.item())
+            # wandb_logger.write("nn_lr", nn_optimizer.param_groups[0]['lr'])
+            # wandb_logger.write("spline_lr", spline_optimizer.param_groups[0]['lr'])
+            # wandb_logger.write("mlp_grad_norm", mlp_grad_norm)
+            # wandb_logger.write("var_loss", scaled_var_loss.item())
+            # wandb_logger.write("grad_loss", scaled_grad_loss.item())
+            # wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
+            # wandb_logger.write("train_loss", total_loss.item())
         
             # valid
-            if(iter % 1000 == 0 or iter == 1):
-                time_analyzer.start_valid()
-                with torch.no_grad():
-                    # warp events by trained flow
-                    valid_events = valid_events_origin.clone()
-                    valid_events = valid_events[:, [2, 1, 0, 3]] # (y, x, t, p) ——> (t, x, y, p)
-                    valid_events_txy = valid_events[:, :3]
-                    valid_ref = warpper.get_reference_time(valid_events_txy, "max")
-                    warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
-                    
-                    # create image warped event 
-                    num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]       
-                    valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
-                    warped_valid_events = torch.cat((warped_valid_events_txy[..., [1,2,0]], valid_polarity), dim=2).to(device)
-                    warped_valid_events = warped_valid_events[...,[1,0,2,3]]
-                    
-                    # save image warped event 
-                    valid_warped_iwe = viz.create_clipped_iwe_for_visualization(warped_valid_events)
-                    viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_"+ str(i))
-                    
-                    # calculate dense optical flow 
-                    flow_calculator = DenseOpticalFlowCalc(
-                        grid_size=image_size, 
-                        intrinsic_mat = intrinsic_mat,
-                        model=warpper.flow_field, 
-                        normalize_coords_mode="None",
-                        device=device
-                    )
-                    
-                    # visualize dense optical flow
-                    t_start = eval_frame_timestamp_list[i] - dataset.min_ts
-                    t_end = eval_frame_timestamp_list[i + gt_dt] - dataset.min_ts
-                    pred_flow = flow_calculator.integrate_flow(t_start, t_end) # [H*W , 2]
-                    pred_flow = pred_flow.cpu().numpy()
-                    viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events_origin.cpu().numpy(), file_prefix="pred_flow_masked" + str(i))
-                    
-                    # calculate optical flow error
-                    pred_flow = torch.from_numpy(pred_flow).unsqueeze(0).to(device)
-                    gt_flow_tensor = torch.from_numpy(gt_flow).unsqueeze(0).to(device)
-                    event_mask = imager.create_eventmask(valid_events_origin).to(device)
-                    flow_error, _ = metric.calculate_flow_error(gt_flow_tensor, pred_flow, event_mask=event_mask)  # type: ignore
-                    
-                    # calculate motion error
-                    t_eval = torch.linspace(start=t_start, end=t_end, steps=100).to(device)
-                    gt_lin_vel, gt_ang_vel = gt_lin_vel_spline.evaluate(t_eval), gt_ang_vel_spline.evaluate(t_eval)
-                    t_eval_norm = torch.linspace(start=0, end=1, steps=100).to(device)
-                    eval_lin_vel, eval_ang_vel = motion_spline.forward(t_eval_norm)
-                    mag_gt_lin_vel = torch.norm(gt_lin_vel, p=2, dim=1, keepdim=True)
-                    eval_lin_vel = eval_lin_vel * mag_gt_lin_vel
-                    
-                    # plot velocity        
-                    fig_lin, fig_ang =  misc.visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
-                    wandb_logger.write_img("linear_velocity_comparision", fig_lin)
-                    wandb_logger.write_img("angular_velocity_comparision", fig_ang)
-                    figure_save_dir = config["logger"]["results_dir"]
-                    lin_vel_figure_save_path = os.path.join(figure_save_dir, f"linear_velocity_comparison_{iter}.png")
-                    ang_vel_figure_save_path = os.path.join(figure_save_dir, f"angular_velocity_comparison_{iter}.png")
-                    fig_lin.savefig(lin_vel_figure_save_path, dpi=300, bbox_inches="tight")
-                    fig_ang.savefig(ang_vel_figure_save_path, dpi=300, bbox_inches="tight")
-                    plt.close(fig_lin)
-                    plt.close(fig_ang)
-                    
-                    epe.append(flow_error["EPE"].item())
-                    ae.append(flow_error["AE"].item())
-                    out.append(flow_error["3PE"].item())
-                    wandb_logger.write("EPE", flow_error["EPE"].item())
-                    wandb_logger.write("AE", flow_error["AE"].item())
-                    wandb_logger.write("1PE", flow_error["1PE"].item())
-                    wandb_logger.write("2PE", flow_error["2PE"].item())
-                    wandb_logger.write("3PE", flow_error["3PE"].item())
-                
-                time_analyzer.end_valid()
-                time_analyzer.end_epoch()
-            wandb_logger.update_buffer()
+            # wandb_logger.update_buffer()
+        tools.time_analyzer.end_epoch()
+        
+        flow_error = run_valid_phase(
+            config, i, events_origin, gt_flow, gt_motion, 
+            warpper, motion_spline,flow_calculator, tools, device
+        )
+        epe.append(flow_error["EPE"])
+        ae.append(flow_error["AE"])
+        out.append(flow_error["3PE"])
+    
+    
     error_dict = {"EPE": np.mean(epe), "AE": np.mean(ae), "3PE": np.mean(out)}
     logger.info(f"Average EPE: {np.mean(epe)}")
     logger.info(f"Average AE: {np.mean(ae)}")
     logger.info(f"Average 3PE: {np.mean(out)}")
     misc.save_flow_error_as_text(error_dict, config["logger"]["results_dir"])
-    stats = time_analyzer.get_statistics()
+    stats = tools.time_analyzer.get_statistics()
     return warpper.flow_field, stats
 
 if __name__ == "__main__":
     # load configs
     args = load_config.parse_args()
     config = load_config.load_yaml_config(args.config)
-    data_config = config["data"]
-    model_config = config["model"]
-    warp_config = config["warp"]
-    optimizer_config = config["optimizer"]
-
-    # wandb
-    wandb_logger = WandbLogger(config)
-
+    
     # detect cuda
     device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
     logger.info(f"Use device: {device}")
-
+    
     # fix seed
     misc.fix_random_seed()
 
     # load dataset 
-    dataloader_config = data_config.pop('loader')
-    dataset = MVSECDataLoader(config=data_config)
-    dataset.set_sequence(data_config["sequence"])
+    dataloader_config = config["data"].pop('loader')
+    dataset = MVSECDataLoader(config=config["data"])
+    dataset.set_sequence(config["data"]["sequence"])
 
+    # instantiate criterion
+    dec_criterion = DifferentialEpipolarLoss()
+    var_criterion = FocusLoss(loss_type="variance", norm="l1")
+    grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
+    criterions = {
+        "grad_criterion": grad_criterion, 
+        "var_criterion": var_criterion,
+        "dec_criterion": dec_criterion
+    } 
+
+    # wandb
+    wandb_logger = WandbLogger(config)
+    
     # event2img converter
-    image_size = (data_config["hight"], data_config["width"])
+    image_size = (config["data"]["hight"], config["data"]["width"])
     imager = EventImager(image_size)
 
     # Visualizer
@@ -439,31 +389,27 @@ if __name__ == "__main__":
         save=True,
         save_dir=config["logger"]["results_dir"],
     )
-    
-    # instantiate criterion
-    dec_criterion = DifferentialEpipolarLoss()
-    var_criterion = FocusLoss(loss_type="variance", norm="l1")
-    grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
-    
-    criterions = {
-        "grad_criterion": grad_criterion, 
-        "var_criterion": var_criterion,
-        "dec_criterion": dec_criterion
-    } 
 
     # time analysis
     time_analyzer = TimeAnalyzer()
 
-    trained_flow_field, time_stats = run_train_phase(
-        args, config, dataset, criterions,
-        imager, viz, wandb_logger, time_analyzer, device
+    # create tools
+    tools = Tools(
+        viz=viz,
+        imager=imager,
+        wandb_logger=wandb_logger,
+        time_analyzer=time_analyzer
     )
     
-    wandb_logger.write("Total Training Time (min)", time_stats["total_train_time"] / 60)
-    wandb_logger.write("Average Epoch Time (min)", time_stats["avg_epoch_time"] / 60)
-    wandb_logger.write("Total Validation Time (min)", time_stats["total_valid_time"] / 60)
-    wandb_logger.write("Average Validation Time (min)", time_stats["avg_valid_time"] / 60)
-    wandb_logger.update_buffer()
+    # trainer
+    trained_flow_field, time_stats = run_train_phase(config, dataset, criterions, tools, device)
+    
+    tools.wandb_logger.write("Total Training Time (min)", time_stats["total_train_time"] / 60)
+    tools.wandb_logger.write("Average Epoch Time (min)", time_stats["avg_epoch_time"] / 60)
+    tools.wandb_logger.write("Average Epoch Time (min)", time_stats["avg_epoch_time"] / 60)
+    tools.wandb_logger.write("Total Validation Time (min)", time_stats["total_valid_time"] / 60)
+    tools.wandb_logger.write("Average Validation Time (min)", time_stats["avg_valid_time"] / 60)
+    tools.wandb_logger.update_buffer()
     
     # Save model
     log_model_path = config["logger"]["model_weight_path"]
@@ -471,4 +417,4 @@ if __name__ == "__main__":
     os.makedirs(dir_name, exist_ok=True)
     torch.save(trained_flow_field.state_dict(), log_model_path)
     
-    wandb_logger.finish()
+    tools.wandb_logger.finish()
