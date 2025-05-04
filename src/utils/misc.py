@@ -34,7 +34,7 @@ def save_flow(file_path: Path, flow: np.ndarray):
     flow_16bit[..., 2] = 1
     imageio.imwrite(str(file_path), flow_16bit, format='PNG-FI')
 
-def fix_random_seed(seed_idx=42) -> None:
+def fix_random_seed(seed_idx=0) -> None:
     random.seed(seed_idx)
     np.random.seed(seed_idx)
     torch.manual_seed(seed_idx)
@@ -236,7 +236,7 @@ def visualize_velocities(
         ax.set_ylabel('Velocity (m/s)', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_ylim(-1,1)
+        ax.set_ylim(-1.0,1.0)
     
     # plt.tight_layout()
     fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
@@ -253,7 +253,7 @@ def visualize_velocities(
         ax.set_ylabel('Velocity (rad/s)', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_ylim(-0.5,0.5)
+        ax.set_ylim(-1.0,1.0)
     
     # plt.tight_layout()
     fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14) 
