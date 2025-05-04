@@ -1,8 +1,10 @@
+import math
 import torch
-import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Optional, Union, Tuple, Dict, Any
+import torch.nn.functional as F
+
+from typing import Tuple
 
 def evaluate_velocity(pred_angular, pred_linear, gt_angular, gt_linear):
     # RMSE
@@ -21,29 +23,20 @@ def evaluate_velocity(pred_angular, pred_linear, gt_angular, gt_linear):
     }
 
 def visualize_endpoint_error(endpoint_error):
-    # 确保输入张量形状正确
-    assert endpoint_error.dim() == 3 and endpoint_error.size(0) == 1, "输入张量应为1×H×W形状"
-    
-    # 移除通道维度，得到H×W
+    assert endpoint_error.dim() == 3 and endpoint_error.size(0) == 1, "The input tensor should be of shape 1×H×W"
     error = endpoint_error.squeeze(0)
-    
-    # 计算最小和最大值，并归一化到[0, 1]
+
     e_min, e_max = error.min(), error.max()
     if (e_max - e_min).item() == 0:
-        # 所有误差相同的情况，返回全蓝色
         error_norm = torch.zeros_like(error)
     else:
         error_norm = (error - e_min) / (e_max - e_min)
     
-    # 创建RGB通道
-    red = error_norm                # 红通道随误差增大
-    blue = 1.0 - error_norm         # 蓝通道随误差减小
-    green = torch.zeros_like(red)   # 绿通道保持为0
+    red = error_norm               
+    blue = 1.0 - error_norm         
+    green = torch.zeros_like(red)   
     
-    # 合并通道并转换为H×W×3形状
     color_map = torch.stack((red, green, blue), dim=-1)
-    
-    # 缩放到0-255范围并转换为uint8类型
     color_map = (color_map * 255).to(torch.uint8)
 
     return color_map
@@ -64,7 +57,7 @@ def calculate_flow_error(
             `0.05 / actual_time_period`.
 
     Retuns:
-        errors (dict) ... Key containers 'AE', 'EPE', '1/2/3PE'. all float.
+        errors (dict) ... Key containers 'AE', 'EPE', '1/2/3PE'. all numpy float.
 
     """
     # Only compute error over points that are valid in the GT (not inf or 0).
@@ -89,18 +82,18 @@ def calculate_flow_error(
         gt_masked = gt_masked * time_scale
         pred_masked = pred_masked * time_scale
     endpoint_error = torch.linalg.norm(gt_masked - pred_masked, dim=1)
-    errors["EPE"] = torch.mean(torch.sum(endpoint_error, dim=(1, 2)) / n_points)
-    errors["1PE"] = torch.mean(torch.sum(endpoint_error > 1, dim=(1, 2)) / n_points)
-    errors["2PE"] = torch.mean(torch.sum(endpoint_error > 2, dim=(1, 2)) / n_points)
-    errors["3PE"] = torch.mean(torch.sum(endpoint_error > 3, dim=(1, 2)) / n_points)
+    errors["EPE"] = torch.mean(torch.sum(endpoint_error, dim=(1, 2)) / n_points).cpu().numpy()
+    errors["1PE"] = torch.mean(torch.sum(endpoint_error > 1, dim=(1, 2)) / n_points).cpu().numpy()
+    errors["2PE"] = torch.mean(torch.sum(endpoint_error > 2, dim=(1, 2)) / n_points).cpu().numpy()
+    errors["3PE"] = torch.mean(torch.sum(endpoint_error > 3, dim=(1, 2)) / n_points).cpu().numpy()
 
     # Angular error
     u, v = pred_masked[:, 0, ...], pred_masked[:, 1, ...]
     u_gt, v_gt = gt_masked[:, 0, ...], gt_masked[:, 1, ...]
     cosine_similarity = (1.0 + u * u_gt + v * v_gt) / (torch.sqrt(1 + u * u + v * v) * torch.sqrt(1 + u_gt * u_gt + v_gt * v_gt))
     cosine_similarity = torch.clamp(cosine_similarity, -1, 1)
-    errors["AE"] = torch.mean(torch.sum(torch.acos(cosine_similarity), dim=(1, 2)) / n_points)
-    errors["AE"] = errors["AE"] * (180.0 / torch.pi)
+    errors["AE"] = torch.mean(torch.sum(torch.acos(cosine_similarity), dim=(1, 2)) / n_points).cpu().numpy()
+    errors["AE"] = errors["AE"] * (180.0 / math.pi)
     return errors, endpoint_error
 
 def analyze_error_histogram(
