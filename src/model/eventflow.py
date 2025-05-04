@@ -40,7 +40,7 @@ class EventFlowINR(nn.Module):
             if len(layer_outputs) > 0:
                 h = h + layer_outputs[-1]
             h = F.relu(h)
-            # h = self.leaky_relu(h)
+
             layer_outputs.append(h)
             if i in self.skips:
                 h = torch.cat([embedded_coord_xyt, h], -1)
@@ -77,7 +77,7 @@ class DenseFlowExtractor:
         initial_positions = torch.stack((self.x, self.y), dim=1)
         
         odefunc = ForwardFlowODEFunc(model, self.device)
-        solution = odeint(odefunc, initial_positions, t, method="dopri5")  # [num_steps, H*W, 2]
+        solution = odeint(odefunc, initial_positions, t, method="euler", options={"step_size": 10})  # [num_steps, H*W, 2]
         final_positions = solution[-1]  # [H*W, 2]
         displacement = final_positions - initial_positions  # [H*W, 2]
         
