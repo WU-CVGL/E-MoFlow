@@ -155,6 +155,13 @@ def save_flow_error_as_text(
     with open(save_file_name, "a") as f:
         f.write(str(flow_error_dict) + "\n")
         
+def save_time_log_as_text(
+    time_stats_dict: dict, dir: str, fname: str = "time_stats.txt"
+):
+    save_file_name = os.path.join(dir, fname)
+    with open(save_file_name, "a") as f:
+        f.write(str(time_stats_dict) + "\n")
+        
 def save_theseus_result_as_text(
     theseus_result: dict, dir: str, fname: str = "theseus_result.txt"
 ):
@@ -236,7 +243,7 @@ def visualize_velocities(
         ax.set_ylabel('Velocity (m/s)', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_ylim(-1.0,1.0)
+        # ax.set_ylim(-1.0,1.0)
     
     # plt.tight_layout()
     fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)

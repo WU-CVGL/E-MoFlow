@@ -40,8 +40,8 @@ class TimeAnalyzer:
         avg_epoch_time = self.total_train_time / len(self.epoch_times)
         avg_valid_time = self.total_valid_time / len(self.valid_times)
         return {
-            'total_train_time': self.total_train_time,
-            'avg_epoch_time': avg_epoch_time,
-            'total_valid_time': self.total_valid_time,
-            'avg_valid_time': avg_valid_time
+            'total_train_time': self.total_train_time / 60.0,
+            'avg_train_time': avg_epoch_time / 60.0,
+            'total_valid_time': self.total_valid_time / 60.0,
+            'avg_valid_time': avg_valid_time / 60.0
         }
