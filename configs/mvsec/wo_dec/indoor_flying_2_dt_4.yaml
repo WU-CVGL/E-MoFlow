@@ -14,7 +14,7 @@ data:
     pin_memory: True
 
 logger:
-  project: mvsec_results
+  project: mvsec_ablation_wo_dec
   expname: indoor_flying_2_all_sequence_dt_4
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
