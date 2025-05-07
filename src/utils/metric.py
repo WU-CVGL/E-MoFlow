@@ -6,21 +6,21 @@ import torch.nn.functional as F
 
 from typing import Tuple
 
-def evaluate_velocity(pred_angular, pred_linear, gt_angular, gt_linear):
-    # RMSE
-    rmse_angular = torch.sqrt(torch.mean((pred_angular - gt_angular)**2))
-    rmse_linear = torch.sqrt(torch.mean((pred_linear - gt_linear)**2))
+def calculate_motion_error(pred_linear, pred_angular, gt_linear, gt_angular):
     
-    # Cosine_similarity
-    cos_sim_angular = F.cosine_similarity(pred_angular, gt_angular, dim=1).mean()
-    cos_sim_linear = F.cosine_similarity(pred_linear, gt_linear, dim=1).mean()
+    def motion_rmse(pred, gt):
+        diff = pred - gt                     
+        squared_errors = diff.pow(2)                  
+        sum_squared = squared_errors.sum(dim=1)       
+        mse_per_element = sum_squared / 3            
+        final_mse = mse_per_element.mean()             
+        final_rmse = final_mse.sqrt() 
+        return final_rmse
     
-    return {
-        "RMSE_angular": rmse_angular.item(),
-        "RMSE_linear": rmse_linear.item(),
-        "CosSim_angular": cos_sim_angular.item(),
-        "CosSim_linear": cos_sim_linear.item()
-    }
+    rmse_linerar_velocity = motion_rmse(pred_linear, gt_linear).cpu().numpy()
+    rmse_angular_velocity = motion_rmse(pred_angular, gt_angular).cpu().numpy() * 180 / math.pi
+    
+    return rmse_linerar_velocity, rmse_angular_velocity
 
 def visualize_endpoint_error(endpoint_error):
     assert endpoint_error.dim() == 3 and endpoint_error.size(0) == 1, "The input tensor should be of shape 1×H×W"
