@@ -111,7 +111,7 @@ class MVSECDataLoader(DataLoaderBase):
             self.setup_gt_flow(os.path.join(self.gt_flow_dir, sequence_name))
             self.setup_gt_motion(os.path.join(self.gt_flow_dir, sequence_name))
             self.omit_invalid_data(sequence_name)
-
+            
         # Calib param
         calib_param = self.load_calib(sequence_name)
         self.intrinsic = calib_param["K"]
@@ -246,7 +246,7 @@ class MVSECDataLoader(DataLoaderBase):
         where x means in width direction, and y means in height direction. p is -1 or 1.
 
         Returns:
-            events (np.ndarray) ... Events. [x, y, t, p] where x is height.
+            events (np.ndarray) ... Events. [y, x, t, p] where y is height.
             t is absolute value, in sec. p is [-1, 1].
         """
         n_events = end_index - start_index + 1
@@ -269,6 +269,7 @@ class MVSECDataLoader(DataLoaderBase):
             events = event_proc.undistort_events(
                 events, self.calib_map_x, self.calib_map_y, self._HEIGHT, self._WIDTH
             )
+        
         return events
 
     # Optical flow (GT)

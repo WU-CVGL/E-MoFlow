@@ -15,6 +15,7 @@ from src.utils import (
     pose,
     metric,
     flow_proc,
+    event_proc,
     load_config
 )
 
@@ -51,23 +52,19 @@ torch.set_float32_matmul_precision('high')
 class Tools:
     viz: Visualizer
     imager: EventImager
-    wandb_logger: WandbLogger
+    # wandb_logger: WandbLogger
     time_analyzer: TimeAnalyzer
-
-def get_gt_motion_spline(dataset: MVSECDataLoader):
-    gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
-    gt_lin_vel_all = torch.from_numpy(gt_lin_vel_array).clone().to(device)
-    gt_ang_vel_all = torch.from_numpy(gt_ang_vel_array).clone().to(device)
-    gt_lin_vel_spline = pose.create_vel_cspline(gt_lin_vel_all)
-    gt_ang_vel_spline = pose.create_vel_cspline(gt_ang_vel_all)
-    return gt_lin_vel_spline, gt_ang_vel_spline
     
 def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
     eval_dt = config["data"]["eval_dt"]
-    eval_frame_timestamp_list = dataset.eval_frame_time_list()
+    eval_frame_timestamp_list = dataset.eval_frame_time_list() 
+    if config["data"]["sequence"] == "outdoor_day1":
+        eval_frame_timestamp_list = eval_frame_timestamp_list[9910:10710]
+    if misc.check_key_and_bool(config["data"], "remove_car"):
+        logger.info("Remove car-boody pixels")
+    
     total_batch_events = []
     total_batch_gt_flow = []
-    
     gt_flow_save_dir = os.path.join(config["logger"]["results_dir"], "gt_flow")
     origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
     
@@ -80,6 +77,8 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
     
         ind1, ind2 = dataset.time_to_index(t1), dataset.time_to_index(t2)
         batch_events = dataset.load_event(ind1, ind2)
+        if misc.check_key_and_bool(config["data"], "remove_car"):
+            batch_events = event_proc.crop_event(batch_events, 0, 193, 0, 346)
         batch_events[...,2] -= dataset.min_ts   # norm_t
         gt_flow = dataset.load_optical_flow(t1, t2)
         
@@ -103,11 +102,8 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
     return total_batch_events, total_batch_gt_flow
 
 def run_valid_phase(
-    config: Dict,  
-    segment_index: int,
-    events_origin: torch.Tensor,
-    gt_flow: torch.Tensor,
-    gt_motion: Dict,
+    config: Dict, segment_index: int, events_origin: torch.Tensor,
+    gt_flow: torch.Tensor, gt_motion: Dict,
     warpper: NeuralODEWarpV2,
     motion_spline: CubicBsplineVelocityModel,
     flow_calculator: DenseFlowExtractor,
@@ -153,12 +149,15 @@ def run_valid_phase(
         
         # calculate motion error
         gt_lin_vel_spline, gt_ang_vel_spline = gt_motion["linear_velocity"], gt_motion["angular_velocity"]
-        t_eval = torch.linspace(start=t_start, end=t_end, steps=100).to(device)
+        t_eval = torch.linspace(start=t_start, end=t_end, steps=101).to(device)
         gt_lin_vel, gt_ang_vel = gt_lin_vel_spline.evaluate(t_eval), gt_ang_vel_spline.evaluate(t_eval)
-        t_eval_norm = torch.linspace(start=0, end=1, steps=100).to(device)
+        t_eval_norm = torch.linspace(start=0, end=1, steps=101).to(device)
         eval_lin_vel, eval_ang_vel = motion_spline.forward(t_eval_norm)
         mag_gt_lin_vel = torch.norm(gt_lin_vel, p=2, dim=1, keepdim=True)
-        eval_lin_vel = eval_lin_vel * mag_gt_lin_vel
+        eval_lin_vel = eval_lin_vel.abs() * mag_gt_lin_vel * gt_lin_vel.sign()
+        eval_t_lin_vel = torch.cat([t_eval[50].reshape(1,1), eval_lin_vel[50].reshape(1,3)], dim=1)
+        eval_t_ang_vel = torch.cat([t_eval[50].reshape(1,1), eval_ang_vel[50].reshape(1,3)], dim=1)
+        eval_motion = {"linear_velocity": eval_t_lin_vel, "angular_velocity": eval_t_ang_vel}
         
         # plot velocity        
         fig_lin, fig_ang = misc.visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
@@ -168,10 +167,10 @@ def run_valid_phase(
         fig_ang.savefig(ang_vel_figure_save_path, dpi=300, bbox_inches="tight")
         plt.close(fig_lin)
         plt.close(fig_ang)
-    
+        
     tools.time_analyzer.end_valid()
     
-    return flow_error
+    return flow_error, eval_motion
     
 def run_train_phase(
     config: Dict, 
@@ -185,7 +184,11 @@ def run_train_phase(
     optimizer_config = config["optimizer"]
     
     # get gt motion spline
-    gt_lin_vel_spline, gt_ang_vel_spline = get_gt_motion_spline(dataset)
+    gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
+    gt_lin_vel_tensor = torch.from_numpy(gt_lin_vel_array).clone().to(device)
+    gt_ang_vel_tensor = torch.from_numpy(gt_ang_vel_array).clone().to(device)
+    gt_lin_vel_spline = pose.create_vel_cspline(gt_lin_vel_tensor)
+    gt_ang_vel_spline = pose.create_vel_cspline(gt_ang_vel_tensor)
     gt_motion = {
         "linear_velocity": gt_lin_vel_spline,
         "angular_velocity": gt_ang_vel_spline
@@ -193,6 +196,9 @@ def run_train_phase(
     
     # generate coordinates on image plane
     intrinsic_mat = torch.from_numpy(dataset.intrinsic).clone()
+    if misc.check_key_and_bool(config["data"], "remove_car"):
+        logger.info("Correct intrinsic matrix")
+        intrinsic_mat[1, 2] -= 0.5 * (260 - 193)
     pixel2cam_converter = Pixel2Cam(
         dataset._HEIGHT, dataset._WIDTH, 
         intrinsic_mat,
@@ -203,11 +209,13 @@ def run_train_phase(
     
     # split events
     total_batch_events, total_batch_gt_flow = split_events(config=config, dataset=dataset, viz=tools.viz)
-    total_batch_events, total_batch_gt_flow = total_batch_events[397:412], total_batch_gt_flow[397:412]
+    # total_batch_events, total_batch_gt_flow = total_batch_events[397:412], total_batch_gt_flow[397:412]
     
     epe = []
     ae = []
     out =[]
+    all_eval_lin_vel = torch.zeros(len(total_batch_events), 4, device=device)    # 形状 (N, 4)
+    all_eval_ang_vel = torch.zeros(len(total_batch_events), 4, device=device)    # 形状 (N, 4)
     for i in tqdm(range(len(total_batch_events))):
         # reset model
         flow_field = EventFlowINR(model_config).to(device)
@@ -313,37 +321,56 @@ def run_train_phase(
             spline_optimizer.step()
             iter+=1  
             
-            # # gradient 
-            # mlp_grad_norm = 0
-            # for p in warpper.flow_field.parameters():
-            #     if p.grad is not None:
-            #         mlp_grad_norm += p.grad.data.norm(2).item() ** 2
-            
-            # wandb_logger.write("nn_lr", nn_optimizer.param_groups[0]['lr'])
-            # wandb_logger.write("spline_lr", spline_optimizer.param_groups[0]['lr'])
-            # wandb_logger.write("mlp_grad_norm", mlp_grad_norm)
-            # wandb_logger.write("var_loss", scaled_var_loss.item())
-            # wandb_logger.write("grad_loss", scaled_grad_loss.item())
-            # wandb_logger.write("dec_loss", scaled_ssl_dec_loss.item())
-            # wandb_logger.write("train_loss", total_loss.item())
-        
-            # valid
-            # wandb_logger.update_buffer()
         tools.time_analyzer.end_epoch()
         
-        flow_error = run_valid_phase(
+        flow_error, eval_motion = run_valid_phase(
             config, i, events_origin, gt_flow, gt_motion, 
             warpper, motion_spline,flow_calculator, tools, device
         )
         epe.append(flow_error["EPE"])
         ae.append(flow_error["AE"])
         out.append(flow_error["3PE"])
+        
+        all_eval_lin_vel[i] = eval_motion["linear_velocity"]
+        all_eval_ang_vel[i] = eval_motion["angular_velocity"]
     
+    all_eval_lin_vel_spline = pose.create_vel_cspline(all_eval_lin_vel)
+    all_eval_ang_vel_spline = pose.create_vel_cspline(all_eval_ang_vel)
+    all_motion_eval_t = torch.from_numpy(gt_lin_vel_array[:, 0]).to(device)
+    eval_lin_vel_tensor = all_eval_lin_vel_spline.evaluate(all_motion_eval_t)
+    eval_ang_vel_tensor = all_eval_ang_vel_spline.evaluate(all_motion_eval_t)
     
-    error_dict = {"EPE": np.mean(epe), "AE": np.mean(ae), "3PE": np.mean(out)}
+    fig_lin, fig_ang = misc.visualize_velocities(
+        gt_lin_vel_tensor[:, 1:], gt_ang_vel_tensor[:, 1:], 
+        eval_lin_vel_tensor, eval_ang_vel_tensor, 
+        all_motion_eval_t
+    )
+    motion_save_dir = os.path.join(config["logger"]["results_dir"], "motion")
+    lin_vel_figure_save_path = os.path.join(motion_save_dir, f"linear_velocity_comparison_whole_seq.png")
+    ang_vel_figure_save_path = os.path.join(motion_save_dir, f"angular_velocity_comparison_whole_seq.png")
+    fig_lin.savefig(lin_vel_figure_save_path, dpi=300, bbox_inches="tight")
+    fig_ang.savefig(ang_vel_figure_save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig_lin)
+    plt.close(fig_ang)
+    
+    rmse_lin, rmse_ang = metric.calculate_motion_error(
+        eval_lin_vel_tensor, eval_ang_vel_tensor,
+        gt_lin_vel_tensor[:, 1:], gt_ang_vel_tensor[:, 1:]
+    )
+    
+    error_dict = {
+        "EPE": np.mean(epe), 
+        "AE": np.mean(ae), 
+        "3PE": np.mean(out),
+        "RMSE_linear": rmse_lin,
+        "RMSE_angular": rmse_ang
+    }
+    
     logger.info(f"Average EPE: {np.mean(epe)}")
     logger.info(f"Average AE: {np.mean(ae)}")
     logger.info(f"Average 3PE: {np.mean(out)}")
+    logger.info(f"RMSE_linear: {rmse_lin}")
+    logger.info(f"RMSE_angular: {rmse_ang}")
     misc.save_flow_error_as_text(error_dict, config["logger"]["results_dir"])
     stats = tools.time_analyzer.get_statistics()
     return warpper.flow_field, stats
@@ -376,7 +403,7 @@ if __name__ == "__main__":
     } 
 
     # wandb
-    wandb_logger = WandbLogger(config)
+    # wandb_logger = WandbLogger(config)
     
     # event2img converter
     image_size = (config["data"]["hight"], config["data"]["width"])
@@ -397,19 +424,20 @@ if __name__ == "__main__":
     tools = Tools(
         viz=viz,
         imager=imager,
-        wandb_logger=wandb_logger,
+        # wandb_logger=wandb_logger,
         time_analyzer=time_analyzer
     )
     
     # trainer
     trained_flow_field, time_stats = run_train_phase(config, dataset, criterions, tools, device)
     
-    tools.wandb_logger.write("Total Training Time (min)", time_stats["total_train_time"] / 60)
-    tools.wandb_logger.write("Average Epoch Time (min)", time_stats["avg_epoch_time"] / 60)
-    tools.wandb_logger.write("Average Epoch Time (min)", time_stats["avg_epoch_time"] / 60)
-    tools.wandb_logger.write("Total Validation Time (min)", time_stats["total_valid_time"] / 60)
-    tools.wandb_logger.write("Average Validation Time (min)", time_stats["avg_valid_time"] / 60)
-    tools.wandb_logger.update_buffer()
+    logger.info("Total Training Time (min)", time_stats["total_train_time"])
+    logger.info("Average Epoch Time (min)", time_stats["avg_epoch_time"])
+    logger.info("Average Epoch Time (min)", time_stats["avg_epoch_time"])
+    logger.info("Total Validation Time (min)", time_stats["total_valid_time"])
+    logger.info("Average Validation Time (min)", time_stats["avg_valid_time"])
+    
+    misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])
     
     # Save model
     log_model_path = config["logger"]["model_weight_path"]
@@ -417,4 +445,4 @@ if __name__ == "__main__":
     os.makedirs(dir_name, exist_ok=True)
     torch.save(trained_flow_field.state_dict(), log_model_path)
     
-    tools.wandb_logger.finish()
+    # tools.wandb_logger.finish()
