@@ -203,6 +203,7 @@ def plot_velocity(lin_vel_array, ang_vel_array, save_dir, prefix_filename):
     _plot_single(ang_vel_array, "angular")
     
 def visualize_velocities(
+    config,
     gt_lin_vel, gt_ang_vel,
     eval_lin_vel, eval_ang_vel,
     t_eval
@@ -243,10 +244,16 @@ def visualize_velocities(
         ax.set_ylabel('Velocity (m/s)', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        # ax.set_ylim(-1.0,1.0)
+        if(config["data"]["sequence"] == "outdoor_day1"):
+            if(i==2):
+                ax.set_ylim(2.0,4.0)
+            else:
+                ax.set_ylim(-1.0,1.0)
+        else:
+            ax.set_ylim(-1.0,1.0)  
     
     # plt.tight_layout()
-    fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
+    # fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
     
     # plot angular velocities
     fig_ang, axs_ang = plt.subplots(3, 1, figsize=(12, 12))
@@ -263,6 +270,6 @@ def visualize_velocities(
         ax.set_ylim(-1.0,1.0)
     
     # plt.tight_layout()
-    fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14) 
+    # fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14) 
     
     return fig_lin, fig_ang

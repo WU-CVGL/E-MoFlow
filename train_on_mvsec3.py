@@ -160,7 +160,7 @@ def run_valid_phase(
         eval_motion = {"linear_velocity": eval_t_lin_vel, "angular_velocity": eval_t_ang_vel}
         
         # plot velocity        
-        fig_lin, fig_ang = misc.visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
+        fig_lin, fig_ang = misc.visualize_velocities(config, gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
         lin_vel_figure_save_path = os.path.join(motion_save_dir, f"linear_velocity_comparison_{str(segment_index)}.png")
         ang_vel_figure_save_path = os.path.join(motion_save_dir, f"angular_velocity_comparison_{str(segment_index)}.png")
         fig_lin.savefig(lin_vel_figure_save_path, dpi=300, bbox_inches="tight")
@@ -181,6 +181,7 @@ def run_train_phase(
 ):  
     model_config = config["model"]
     warp_config = config["warp"]
+    loss_config = config["loss"]
     optimizer_config = config["optimizer"]
     
     # get gt motion spline
@@ -264,38 +265,45 @@ def run_train_phase(
                 blur=True
             ) # [n,h,w] n should be one
             
+            grad_loss = 0
+            var_loss = 0
+            ssl_average_dec_loss = 0
+            
             # CMax loss
-            if num_iwe == 1:
-                var_loss = criterion["var_criterion"](iwes)
-                grad_loss = criterion["grad_criterion"](iwes)
-            elif num_iwe > 1:
-                raise ValueError("Multiple iwes are not supported")
+            if misc.check_key_and_bool(loss_config, "cmax"):
+                if num_iwe == 1:
+                    var_loss = criterion["var_criterion"](iwes)
+                    grad_loss = criterion["grad_criterion"](iwes)
+                elif num_iwe > 1:
+                    raise ValueError("Multiple iwes are not supported")
             
-            # sample coordinates
-            events_mask = tools.imager.create_eventmask(warped_events)
-            events_mask = events_mask[0].squeeze(0).to(device)
-            sample_coords = pixel2cam_converter.sample_sparse_coordinates(
-                coord_tensor=image_coords,
-                mask=events_mask,
-                n=10000
-            )
-            t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
-            sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
-            
-            # get optical flow and coordinate on normalized plane
-            sample_flow = warpper.flow_field.forward(sample_txy)
-            sample_flow = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
-            sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
-            sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
-            
-            # differential epipolar constrain
-            t_min, t_max = torch.min(batch_events_txy[..., 0]), torch.max(batch_events_txy[..., 0])
-            interp_t = (t_ref - t_min) / (t_max - t_min)
-            lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
-            ssl_dec_error, ssl_average_dec_loss = criterion["dec_criterion"](
-                sample_norm_coords, sample_norm_flow, 
-                lin_vel, ang_vel
-            )
+            # DEC loss
+            if misc.check_key_and_bool(loss_config, "dec"):
+                # sample coordinates
+                events_mask = tools.imager.create_eventmask(warped_events)
+                events_mask = events_mask[0].squeeze(0).to(device)
+                sample_coords = pixel2cam_converter.sample_sparse_coordinates(
+                    coord_tensor=image_coords,
+                    mask=events_mask,
+                    n=10000
+                )
+                t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
+                sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
+                
+                # get optical flow and coordinate on normalized plane
+                sample_flow = warpper.flow_field.forward(sample_txy)
+                sample_flow = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
+                sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
+                sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
+                
+                # differential epipolar constrain
+                t_min, t_max = torch.min(batch_events_txy[..., 0]), torch.max(batch_events_txy[..., 0])
+                interp_t = (t_ref - t_min) / (t_max - t_min)
+                lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
+                ssl_dec_error, ssl_average_dec_loss = criterion["dec_criterion"](
+                    sample_norm_coords, sample_norm_flow, 
+                    lin_vel, ang_vel
+                )
             # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
             # v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
             # gt_dec_error, gt_average_dec_loss = differential_epipolar_constrain(

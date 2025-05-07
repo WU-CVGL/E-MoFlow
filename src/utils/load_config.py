@@ -24,7 +24,7 @@ def load_yaml_config(yaml_path):
 def parse_args():
     parser = argparse.ArgumentParser(description="configs for NeuEF")
 
-    parser.add_argument('--config', type=str, default='configs/mvsec.yaml', 
+    parser.add_argument('--config', type=str, default='configs/mvsec/dt_1/outdoor_day_1_dt_1.yaml', 
                         help="Path to the config file.")
     parser.add_argument('--gpu', type=int, default=0,
                         help='index of gpu to use')
