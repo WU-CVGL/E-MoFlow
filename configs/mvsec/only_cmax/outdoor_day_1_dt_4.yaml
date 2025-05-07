@@ -6,7 +6,7 @@ data:
   sequence: "outdoor_day1"
   hight: 260
   width: 346
-  eval_dt: 1
+  eval_dt: 4
   remove_car: True
   loader:
     num_workers: 16
@@ -16,18 +16,18 @@ data:
 
 logger:
   project: mvsec_results
-  expname: outdoor_day_1_all_sequence_dt_1
+  expname: outdoor_day_1_all_sequence_dt_4
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
 loss:
   cmax: True
-  dec: True
+  dec: False
 
 model:
   pos_encode: False
   multires: 2
-
+  
 optimizer:
   nn_initial_lr: 1.0e-4
   nn_final_lr: 6.3e-5

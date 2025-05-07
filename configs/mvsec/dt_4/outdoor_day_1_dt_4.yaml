@@ -20,10 +20,14 @@ logger:
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
+loss:
+  cmax: True
+  dec: True
+
 model:
   pos_encode: False
   multires: 2
-
+  
 optimizer:
   nn_initial_lr: 1.0e-4
   nn_final_lr: 6.3e-5
