@@ -34,7 +34,6 @@ class TimeAnalyzer:
         valid_time = valid_end_time - self.valid_start_time
         self.valid_times.append(valid_time)
         self.total_valid_time += valid_time
-        self.total_train_time -= valid_time # Subtract valid time from total time
         
     def get_statistics(self):
         """Get timing statistics"""
