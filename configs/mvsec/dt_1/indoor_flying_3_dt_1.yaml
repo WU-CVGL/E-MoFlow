@@ -1,0 +1,37 @@
+data:
+  dataset_name: "MVSEC"
+  data_path: "/run/determined/workdir/data/MVSEC/hdf5"
+  load_gt_flow: True
+  gt_path: "/run/determined/workdir/data/MVSEC/flow_gt"
+  sequence: "indoor_flying3"
+  hight: 260
+  width: 346
+  eval_dt: 1
+  loader:
+    num_workers: 16
+    batch_size: 32
+    shuffle: True
+    pin_memory: True
+
+logger:
+  project: mvsec_results
+  expname: indoor_flying_3_all_sequence_dt_1
+  results_dir: ./outputs/${project}/${expname}
+  model_weight_path: ./weights/${project}_${expname}.pth
+
+model:
+  pos_encode: False
+  multires: 2
+
+optimizer:
+  nn_initial_lr: 1.0e-4
+  nn_final_lr: 6.3e-5
+  spline_lr: 1.0e-2
+  num_iters: 1000
+
+warp:
+  tref_setting: "random"
+  solver: "euler"
+  step_size: 10
+  rtol: 1.0e-7
+  atol: 1.0e-9
