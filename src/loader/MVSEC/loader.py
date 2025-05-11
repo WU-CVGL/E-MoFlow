@@ -249,7 +249,7 @@ class MVSECDataLoader(DataLoaderBase):
             events (np.ndarray) ... Events. [y, x, t, p] where y is height.
             t is absolute value, in sec. p is [-1, 1].
         """
-        n_events = end_index - start_index + 1
+        n_events = end_index - start_index
         events = np.zeros((n_events, 4), dtype=np.float64)
 
         if cam == "left":
@@ -258,10 +258,10 @@ class MVSECDataLoader(DataLoaderBase):
                     f"Specified {start_index} to {end_index} index for {len(self.left_event)}."
                 )
                 raise IndexError
-            events[:, 0] = self.left_event[start_index:end_index+1, 1]
-            events[:, 1] = self.left_event[start_index:end_index+1, 0]
-            events[:, 2] = self.left_ts[start_index:end_index+1]
-            events[:, 3] = self.left_event[start_index:end_index+1, 3]
+            events[:, 0] = self.left_event[start_index:end_index, 1]
+            events[:, 1] = self.left_event[start_index:end_index, 0]
+            events[:, 2] = self.left_ts[start_index:end_index]
+            events[:, 3] = self.left_event[start_index:end_index, 3]
         elif cam == "right":
             logger.error("Please select `left`as `cam` parameter.")
             raise NotImplementedError
@@ -336,8 +336,8 @@ class MVSECDataLoader(DataLoaderBase):
 
     def load_gt_motion(self):
         timestamps_col = self.gt_timestamps.reshape(-1, 1) - self.min_ts
-        self.lin_vel_gt_with_t_all = np.hstack([timestamps_col, self.lin_vel_gt_all])  # shape (1280, 4)
-        self.ang_vel_gt_with_t_all = np.hstack([timestamps_col, self.ang_vel_gt_all])  # shape (1280, 4)
+        self.lin_vel_gt_with_t_all = np.hstack([timestamps_col, self.lin_vel_gt_all])  # shape (N, 4)
+        self.ang_vel_gt_with_t_all = np.hstack([timestamps_col, self.ang_vel_gt_all])  # shape (N, 4)
         return self.lin_vel_gt_with_t_all, self.ang_vel_gt_with_t_all
     
     def load_calib(self, sequence_name) -> dict:
