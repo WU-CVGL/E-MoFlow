@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from typing import Tuple
 
-def calculate_motion_error(pred_linear, pred_angular, gt_linear, gt_angular):
+def calculate_motion_metric(pred_linear, pred_angular, gt_linear, gt_angular):
     
     def motion_rmse(pred, gt):
         diff = pred - gt                     
@@ -17,10 +17,20 @@ def calculate_motion_error(pred_linear, pred_angular, gt_linear, gt_angular):
         final_rmse = final_mse.sqrt() 
         return final_rmse
     
+    def motion_error(pred, gt):
+        diff = pred - gt                     
+        errors = torch.abs(diff)                  
+        sum_errors = errors.sum(dim=1)       
+        error_per_element = sum_errors / 3            
+        final_error = error_per_element.mean()             
+        return final_error
+    
     rmse_linerar_velocity = motion_rmse(pred_linear, gt_linear).cpu().numpy()
     rmse_angular_velocity = motion_rmse(pred_angular, gt_angular).cpu().numpy() * 180 / math.pi
+    error_linerar_velocity = motion_error(pred_linear, gt_linear).cpu().numpy()
+    error_angular_velocity = motion_error(pred_angular, gt_angular).cpu().numpy() * 180 / math.pi
     
-    return rmse_linerar_velocity, rmse_angular_velocity
+    return rmse_linerar_velocity, rmse_angular_velocity, error_linerar_velocity, error_angular_velocity
 
 def visualize_endpoint_error(endpoint_error):
     assert endpoint_error.dim() == 3 and endpoint_error.size(0) == 1, "The input tensor should be of shape 1×H×W"
@@ -41,7 +51,7 @@ def visualize_endpoint_error(endpoint_error):
 
     return color_map
 
-def calculate_flow_error(
+def calculate_flow_metric(
     flow_gt: torch.Tensor,
     flow_pred: torch.Tensor,
     event_mask: torch.Tensor = None,
