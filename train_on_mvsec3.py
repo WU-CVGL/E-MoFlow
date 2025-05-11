@@ -56,14 +56,19 @@ class Tools:
     time_analyzer: TimeAnalyzer
     
 def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
-    eval_dt = config["data"]["eval_dt"]
+    data_config = config["data"]
+    eval_dt = data_config["eval_dt"]
+    n_events = data_config["n_events_per_batch"]
     eval_frame_timestamp_list = dataset.eval_frame_time_list() 
-    if config["data"]["sequence"] == "outdoor_day1":
-        eval_frame_timestamp_list = eval_frame_timestamp_list[9910:10710]
-    if misc.check_key_and_bool(config["data"], "remove_car"):
+    if data_config["sequence"] == "outdoor_day1":
+        eval_frame_timestamp_list = eval_frame_timestamp_list[
+            data_config["valid_frame_1"] : data_config["valid_frame_2"]
+        ]
+    if misc.check_key_and_bool(data_config, "remove_car"):
         logger.info("Remove car-boody pixels")
     
     total_batch_events = []
+    total_batch_events_for_train = []
     total_batch_gt_flow = []
     gt_flow_save_dir = os.path.join(config["logger"]["results_dir"], "gt_flow")
     origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
@@ -77,16 +82,31 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
     
         ind1, ind2 = dataset.time_to_index(t1), dataset.time_to_index(t2)
         batch_events = dataset.load_event(ind1, ind2)
-        if misc.check_key_and_bool(config["data"], "remove_car"):
-            batch_events = event_proc.crop_event(batch_events, 0, 193, 0, 346)
-        batch_events[...,2] -= dataset.min_ts   # norm_t
+        batch_events[..., 2] -= dataset.min_ts
         gt_flow = dataset.load_optical_flow(t1, t2)
+        if ind2 - ind1 < n_events:
+            # logger.info(
+            #     f"Less events in one GT flow sequence. Events: {ind2-ind1} / Expected: {n_events}"
+            # )
+            insufficient = n_events - (ind2 - ind1)
+            ind1 -= insufficient // 2
+            ind2 += insufficient // 2
+        elif ind2 - ind1 > n_events:
+            # logger.info(
+            #     f"Too many events in one GT flow sequence. Events: {ind2-ind1} / Expected: {n_events}"
+            # )
+            ind1 = ind2 - n_events
         
+        batch_events_for_train = dataset.load_event(max(ind1, 0), min(ind2, len(dataset)))
+        batch_events_for_train[..., 2] -= dataset.min_ts
+        if misc.check_key_and_bool(data_config, "remove_car"):
+            batch_events_for_train = event_proc.crop_event(batch_events_for_train, 0, 193, 0, 346)
+            batch_events = event_proc.crop_event(batch_events, 0, 193, 0, 346)
+            
         batch_events_tensor = torch.tensor(batch_events, dtype=torch.float32).to(device)
         batch_events_iwe = viz.create_clipped_iwe_for_visualization(batch_events_tensor)
         viz.update_save_dir(origin_iwe_save_dir)
         viz.visualize_image(batch_events_iwe.squeeze(0), file_prefix="origin_iwe_")
-        
         gt_flow = np.transpose(gt_flow, (2, 0, 1))  # [2, H, W]
         viz.update_save_dir(gt_flow_save_dir)
         viz.visualize_optical_flow(
@@ -97,12 +117,13 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
         )
         
         total_batch_events.append(batch_events)
+        total_batch_events_for_train.append(batch_events_for_train)
         total_batch_gt_flow.append(gt_flow)
         
-    return total_batch_events, total_batch_gt_flow
+    return total_batch_events, total_batch_events_for_train, total_batch_gt_flow
 
 def run_valid_phase(
-    config: Dict, segment_index: int, events_origin: torch.Tensor,
+    config: Dict, segment_index: int, batch_events: torch.Tensor,
     gt_flow: torch.Tensor, gt_motion: Dict,
     warpper: NeuralODEWarpV2,
     motion_spline: CubicBsplineVelocityModel,
@@ -119,7 +140,7 @@ def run_valid_phase(
     tools.time_analyzer.start_valid()
     with torch.no_grad():
         # warp events by trained flow
-        valid_events = events_origin.clone()
+        valid_events = batch_events.clone()
         valid_events_txy = valid_events[:, [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
         valid_ref = warpper.get_reference_time(valid_events_txy, "max")
         warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
@@ -140,7 +161,7 @@ def run_valid_phase(
         pred_flow = flow_calculator.integrate_flow(warpper.flow_field, t_start, t_end).unsqueeze(0) # [B,2,H,W]
         gt_flow = gt_flow.unsqueeze(0).to(device) # [B,2,H,W]
         event_mask = tools.imager.create_eventmask(valid_events).to(device)
-        flow_error, _ = metric.calculate_flow_error(gt_flow, pred_flow, event_mask=event_mask)  # type: ignore
+        flow_metric, _ = metric.calculate_flow_metric(gt_flow, pred_flow, event_mask=event_mask)  # type: ignore
         
         # visualize dense optical flow
         pred_flow = pred_flow.squeeze(0).cpu().numpy()
@@ -155,6 +176,15 @@ def run_valid_phase(
         eval_lin_vel, eval_ang_vel = motion_spline.forward(t_eval_norm)
         mag_gt_lin_vel = torch.norm(gt_lin_vel, p=2, dim=1, keepdim=True)
         eval_lin_vel = eval_lin_vel.abs() * mag_gt_lin_vel * gt_lin_vel.sign()
+        rmse_lin, rmse_ang, e_lin, e_ang = metric.calculate_motion_metric(
+            eval_lin_vel, eval_ang_vel, gt_lin_vel, gt_ang_vel
+        )
+        motion_metric = {
+            "rmse_linear": rmse_lin, 
+            "rmse_angular": rmse_ang,
+            "error_linear": e_lin,
+            "error_angular": e_ang
+        }
         eval_t_lin_vel = torch.cat([t_eval[50].reshape(1,1), eval_lin_vel[50].reshape(1,3)], dim=1)
         eval_t_ang_vel = torch.cat([t_eval[50].reshape(1,1), eval_ang_vel[50].reshape(1,3)], dim=1)
         eval_motion = {"linear_velocity": eval_t_lin_vel, "angular_velocity": eval_t_ang_vel}
@@ -170,7 +200,7 @@ def run_valid_phase(
         
     tools.time_analyzer.end_valid()
     
-    return flow_error, eval_motion
+    return flow_metric, motion_metric, eval_motion
     
 def run_train_phase(
     config: Dict, 
@@ -179,13 +209,26 @@ def run_train_phase(
     tools: Tools,
     device: torch.device
 ):  
+    data_config = config["data"]
     model_config = config["model"]
     warp_config = config["warp"]
     loss_config = config["loss"]
     optimizer_config = config["optimizer"]
     
+    # split events
+    total_batch_events, total_batch_events_for_train, total_batch_gt_flow = split_events(config=config, dataset=dataset, viz=tools.viz)
+    
     # get gt motion spline
     gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
+    if data_config["sequence"] == "outdoor_day1":
+        valid_t_min = np.min(total_batch_events[0][:, 2])
+        valid_t_max = np.max(total_batch_events[-1][:, 2])
+        gt_lin_vel_array = gt_lin_vel_array[
+            (gt_lin_vel_array[:, 0] >= valid_t_min) & (gt_lin_vel_array[:, 0] <= valid_t_max)
+        ]
+        gt_ang_vel_array = gt_ang_vel_array[
+            (gt_ang_vel_array[:, 0] >= valid_t_min) & (gt_ang_vel_array[:, 0] <= valid_t_max)
+        ]
     gt_lin_vel_tensor = torch.from_numpy(gt_lin_vel_array).clone().to(device)
     gt_ang_vel_tensor = torch.from_numpy(gt_ang_vel_array).clone().to(device)
     gt_lin_vel_spline = pose.create_vel_cspline(gt_lin_vel_tensor)
@@ -197,7 +240,7 @@ def run_train_phase(
     
     # generate coordinates on image plane
     intrinsic_mat = torch.from_numpy(dataset.intrinsic).clone()
-    if misc.check_key_and_bool(config["data"], "remove_car"):
+    if misc.check_key_and_bool(data_config, "remove_car"):
         logger.info("Correct intrinsic matrix")
         intrinsic_mat[1, 2] -= 0.5 * (260 - 193)
     pixel2cam_converter = Pixel2Cam(
@@ -208,15 +251,10 @@ def run_train_phase(
     image_coords = pixel2cam_converter.generate_image_coordinate()
     flow_calculator = DenseFlowExtractor(grid_size=image_size, device=device)
     
-    # split events
-    total_batch_events, total_batch_gt_flow = split_events(config=config, dataset=dataset, viz=tools.viz)
-    # total_batch_events, total_batch_gt_flow = total_batch_events[397:412], total_batch_gt_flow[397:412]
-    
-    epe = []
-    ae = []
-    out =[]
-    all_eval_lin_vel = torch.zeros(len(total_batch_events), 4, device=device)    # 形状 (N, 4)
-    all_eval_ang_vel = torch.zeros(len(total_batch_events), 4, device=device)    # 形状 (N, 4)
+    epe, ae, out = [], [], []
+    rmse_lin, rmse_ang, e_lin, e_ang = [], [], [], []
+    all_eval_lin_vel = torch.zeros(len(total_batch_events), 4, device=device) # shape:(N, 4)   
+    all_eval_ang_vel = torch.zeros(len(total_batch_events), 4, device=device) # shape:(N, 4)
     for i in tqdm(range(len(total_batch_events))):
         # reset model
         flow_field = EventFlowINR(model_config).to(device)
@@ -235,26 +273,32 @@ def run_train_phase(
         )
         
         # segment i
-        events_origin = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
+        batch_events = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
+        batch_events_for_train = torch.tensor(total_batch_events_for_train[i], dtype=torch.float32).to(device)
         gt_flow = torch.tensor(total_batch_gt_flow[i], dtype=torch.float32).to(device)
+        batch_t_min, batch_t_max = torch.min(batch_events_for_train[:, 2]), torch.max(batch_events_for_train[:, 2])
+        batch_t_ref = torch.linspace(batch_t_min, batch_t_max, 100).to(device)
+        indices = torch.arange(100).repeat_interleave(10)
+        shuffled_indices = indices[torch.randperm(num_iters)]
         print(f"Segment {i}")
-        
+
         iter = 0
         tools.time_analyzer.start_epoch()
-        for j in tqdm(range(num_iters)): 
+        for j, idx in enumerate(tqdm(shuffled_indices)):
             # reset optimizer
             nn_optimizer.zero_grad()
             spline_optimizer.zero_grad()
             
             # warp events by neural ode
-            batch_events = events_origin.clone() # (y, x, t, p)
-            batch_events_txy = batch_events[..., [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
-            t_ref = warpper.get_reference_time(batch_events_txy, warp_config["tref_setting"])
-            warped_events_txy = warpper.warp_events(batch_events_txy, t_ref).unsqueeze(0)
+            events_train = batch_events_for_train.clone() # (y, x, t, p)
+            events_txy = events_train[..., [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
+            t_ref = batch_t_ref[idx]
+            # t_ref = warpper.get_reference_time(batch_events_txy, warp_config["tref_setting"])
+            warped_events_txy = warpper.warp_events(events_txy, t_ref).unsqueeze(0)
 
             # create image warped event    
             num_iwe, num_events = warped_events_txy.shape[0], warped_events_txy.shape[1]
-            polarity = batch_events[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1)
+            polarity = events_train[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1)
             warped_events = torch.cat((warped_events_txy[..., [2,1,0]], polarity), dim=2).to(device) # (t, x, y) ——> (y,x,t,p)
             
             # events should be reorganized as (y,x,t,p) that can processed by create_iwes
@@ -267,6 +311,7 @@ def run_train_phase(
             
             grad_loss = 0
             var_loss = 0
+            sl_average_dec_loss = 0
             ssl_average_dec_loss = 0
             
             # CMax loss
@@ -277,8 +322,8 @@ def run_train_phase(
                 elif num_iwe > 1:
                     raise ValueError("Multiple iwes are not supported")
             
-            # DEC loss
-            if misc.check_key_and_bool(loss_config, "dec"):
+            # ssl DEC loss
+            if misc.check_key_and_bool(loss_config, "ssl_dec"):
                 # sample coordinates
                 events_mask = tools.imager.create_eventmask(warped_events)
                 events_mask = events_mask[0].squeeze(0).to(device)
@@ -297,47 +342,76 @@ def run_train_phase(
                 sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
                 
                 # differential epipolar constrain
-                t_min, t_max = torch.min(batch_events_txy[..., 0]), torch.max(batch_events_txy[..., 0])
+                t_min, t_max = torch.min(events_txy[..., 0]), torch.max(events_txy[..., 0])
                 interp_t = (t_ref - t_min) / (t_max - t_min)
                 lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
                 ssl_dec_error, ssl_average_dec_loss = criterion["dec_criterion"](
                     sample_norm_coords, sample_norm_flow, 
                     lin_vel, ang_vel
                 )
-            # v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
-            # v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
-            # gt_dec_error, gt_average_dec_loss = differential_epipolar_constrain(
-            #     sample_norm_coords, sample_norm_flow, 
-            #     v_gt, w_gt
-            # )
+            
+            # sl DEC loss
+            if misc.check_key_and_bool(loss_config, "sl_dec"):
+                # sample coordinates
+                events_mask = tools.imager.create_eventmask(warped_events)
+                events_mask = events_mask[0].squeeze(0).to(device)
+                sample_coords = pixel2cam_converter.sample_sparse_coordinates(
+                    coord_tensor=image_coords,
+                    mask=events_mask,
+                    n=1000
+                )
+                t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
+                sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
+                
+                # get optical flow and coordinate on normalized plane
+                sample_flow = warpper.flow_field.forward(sample_txy)
+                sample_flow = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
+                sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
+                sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
+                
+                v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
+                v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
+                sl_dec_error, sl_average_dec_loss = criterion["dec_criterion"](
+                    sample_norm_coords, sample_norm_flow, 
+                    v_gt, w_gt
+                )
                     
             # Total loss
             alpha, beta, gamma = 1, 1, 2.5   # 2.5
             scaled_grad_loss = alpha * grad_loss
             scaled_var_loss = beta * var_loss
-            scaled_ssl_dec_loss = gamma * ssl_average_dec_loss
+            scaled_dec_loss = 0
+            if misc.check_key_and_bool(loss_config, "ssl_dec"):
+                scaled_dec_loss = gamma * ssl_average_dec_loss
+            if misc.check_key_and_bool(loss_config, "sl_dec"):
+                scaled_dec_loss = gamma * sl_average_dec_loss
             
             if(j<=200):
                 total_loss = - (scaled_grad_loss + scaled_var_loss)
             else:
-                total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_ssl_dec_loss
+                total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss
             
             # step
             total_loss.backward()
             nn_optimizer.step()
             nn_scheduler.step()
-            spline_optimizer.step()
+            if misc.check_key_and_bool(loss_config, "ssl_dec"):
+                spline_optimizer.step()
             iter+=1  
             
         tools.time_analyzer.end_epoch()
         
-        flow_error, eval_motion = run_valid_phase(
-            config, i, events_origin, gt_flow, gt_motion, 
-            warpper, motion_spline,flow_calculator, tools, device
+        flow_metric, motion_metric, eval_motion = run_valid_phase(
+            config, i, batch_events, gt_flow, gt_motion, 
+            warpper, motion_spline, flow_calculator, tools, device
         )
-        epe.append(flow_error["EPE"])
-        ae.append(flow_error["AE"])
-        out.append(flow_error["3PE"])
+        epe.append(flow_metric["EPE"])
+        ae.append(flow_metric["AE"])
+        out.append(flow_metric["3PE"])
+        rmse_lin.append(motion_metric["rmse_linear"])
+        rmse_ang.append(motion_metric["rmse_angular"])
+        e_lin.append(motion_metric["error_linear"])
+        e_ang.append(motion_metric["error_angular"])
         
         all_eval_lin_vel[i] = eval_motion["linear_velocity"]
         all_eval_ang_vel[i] = eval_motion["angular_velocity"]
@@ -349,6 +423,7 @@ def run_train_phase(
     eval_ang_vel_tensor = all_eval_ang_vel_spline.evaluate(all_motion_eval_t)
     
     fig_lin, fig_ang = misc.visualize_velocities(
+        config,
         gt_lin_vel_tensor[:, 1:], gt_ang_vel_tensor[:, 1:], 
         eval_lin_vel_tensor, eval_ang_vel_tensor, 
         all_motion_eval_t
@@ -361,25 +436,17 @@ def run_train_phase(
     plt.close(fig_lin)
     plt.close(fig_ang)
     
-    rmse_lin, rmse_ang = metric.calculate_motion_error(
-        eval_lin_vel_tensor, eval_ang_vel_tensor,
-        gt_lin_vel_tensor[:, 1:], gt_ang_vel_tensor[:, 1:]
-    )
-    
     error_dict = {
         "EPE": np.mean(epe), 
         "AE": np.mean(ae), 
         "3PE": np.mean(out),
-        "RMSE_linear": rmse_lin,
-        "RMSE_angular": rmse_ang
+        "RMSE_linear": np.mean(rmse_lin),
+        "RMSE_angular": np.mean(rmse_ang),
+        "ERROR_linear": np.mean(e_lin),
+        "ERROR_angular": np.mean(e_ang)
     }
     
-    logger.info(f"Average EPE: {np.mean(epe)}")
-    logger.info(f"Average AE: {np.mean(ae)}")
-    logger.info(f"Average 3PE: {np.mean(out)}")
-    logger.info(f"RMSE_linear: {rmse_lin}")
-    logger.info(f"RMSE_angular: {rmse_ang}")
-    misc.save_flow_error_as_text(error_dict, config["logger"]["results_dir"])
+    misc.save_metric_as_text(error_dict, config["logger"]["results_dir"])
     stats = tools.time_analyzer.get_statistics()
     return warpper.flow_field, stats
 
@@ -439,11 +506,14 @@ if __name__ == "__main__":
     # trainer
     trained_flow_field, time_stats = run_train_phase(config, dataset, criterions, tools, device)
     
-    logger.info("Total Training Time (min)", time_stats["total_train_time"])
-    logger.info("Average Epoch Time (min)", time_stats["avg_epoch_time"])
-    logger.info("Average Epoch Time (min)", time_stats["avg_epoch_time"])
-    logger.info("Total Validation Time (min)", time_stats["total_valid_time"])
-    logger.info("Average Validation Time (min)", time_stats["avg_valid_time"])
+    total_train_time = time_stats["total_train_time"]
+    avg_train_time = time_stats["avg_train_time"]
+    total_valid_time = time_stats["total_valid_time"]
+    avg_valid_time = time_stats["avg_valid_time"]
+    # logger.info(f"Total Training Time (min): {total_train_time}")
+    # logger.info(f"Average Training Time (min): {avg_train_time}")
+    # logger.info(f"Total Validation Time (min): {total_valid_time}")
+    # logger.info(f"Average Validation Time (min): {avg_valid_time}")
     
     misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])
     
