@@ -7,7 +7,10 @@ data:
   hight: 260
   width: 346
   eval_dt: 4
+  n_events_per_batch: 30000
   remove_car: True
+  valid_frame_1: 10157
+  valid_frame_2: 10957
   loader:
     num_workers: 16
     batch_size: 32
@@ -15,14 +18,15 @@ data:
     pin_memory: True
 
 logger:
-  project: mvsec_ablation_wo_dec
-  expname: outdoor_day_1_all_sequence_dt_4
+  project: mvsec_ablation_wo_dec_n_events
+  expname: nn_8_lr_1e-4~6.3e-5_outdoor_day_1_all_sequence_dt_4
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
 loss:
   cmax: True
-  dec: False
+  ssl_dec: False
+  sl_dec: False
 
 model:
   pos_encode: False
@@ -31,7 +35,7 @@ model:
 optimizer:
   nn_initial_lr: 1.0e-4
   nn_final_lr: 6.3e-5
-  spline_lr: 1.0e-2
+  spline_lr: 0
   num_iters: 1000
 
 warp:

@@ -15,15 +15,15 @@ data:
     pin_memory: True
 
 logger:
-  project: mvsec_results_test_n_events
+  project: mvsec_ablation_gt_motion_n_events
   expname: nn_8_lr_1e-4~6.3e-5_indoor_flying_1_all_sequence_dt_4
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
 loss:
   cmax: True
-  ssl_dec: True
-  sl_dec: False
+  ssl_dec: False
+  sl_dec: True
 
 model:
   pos_encode: False
@@ -32,7 +32,7 @@ model:
 optimizer:
   nn_initial_lr: 1.0e-4
   nn_final_lr: 6.3e-5
-  spline_lr: 1.0e-3
+  spline_lr: 0
   num_iters: 1000
 
 warp:
