@@ -24,6 +24,7 @@ class EventFlowINR(nn.Module):
                                         range(D - 1)])
 
         self.output_linear = nn.Linear(W+input_ch if self.skips[-1]==D-1 else W, output_ch)
+        # self.output_linear = nn.Linear(W, output_ch)
 
     def forward(self, coord_txy: torch.Tensor):
         # create positional encoding
@@ -77,7 +78,7 @@ class DenseFlowExtractor:
         initial_positions = torch.stack((self.x, self.y), dim=1)
         
         odefunc = ForwardFlowODEFunc(model, self.device)
-        solution = odeint(odefunc, initial_positions, t, method="euler", options={"step_size": 10})  # [num_steps, H*W, 2]
+        solution = odeint(odefunc, initial_positions, t, method="euler")  # [num_steps, H*W, 2]
         final_positions = solution[-1]  # [H*W, 2]
         displacement = final_positions - initial_positions  # [H*W, 2]
         
