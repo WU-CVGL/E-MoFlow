@@ -1,4 +1,5 @@
 import os
+import math
 import torch
 import random
 import logging
@@ -213,9 +214,9 @@ def visualize_velocities(
         return tensor.cpu().numpy() if isinstance(tensor, torch.Tensor) else tensor
     
     gt_lin = to_numpy(gt_lin_vel)
-    gt_ang = to_numpy(gt_ang_vel)
+    gt_ang = to_numpy(gt_ang_vel) * 180 / math.pi
     eval_lin = to_numpy(eval_lin_vel)
-    eval_ang = to_numpy(eval_ang_vel)
+    eval_ang = to_numpy(eval_ang_vel) * 180 / math.pi
     time = to_numpy(t_eval).squeeze()
     
     # assert dim
@@ -232,44 +233,39 @@ def visualize_velocities(
     }
     
     # plot linear velocities
-    fig_lin, axs_lin = plt.subplots(3, 1, figsize=(12, 12))
+    fig_lin, axs_lin = plt.subplots(3, 1, figsize=(8, 6), tight_layout=True)
+    fig_ang, axs_ang = plt.subplots(3, 1, figsize=(8, 6), tight_layout=True)
     components = ['X', 'Y', 'Z']
     
     for i, (ax, comp) in enumerate(zip(axs_lin, components)):
-        ax.plot(time, gt_lin[:, i], label='Ground Truth', color='#1f77b4', **plot_config)
-        ax.plot(time, eval_lin[:, i], label='Estimated', color='#ff7f0e', linestyle='--', **plot_config)
-        ax.set_title(f'Linear Velocity - {comp} Component', fontsize=12)
-        if(i==2):
-            ax.set_xlabel('Time (s)', fontsize=10)
-        ax.set_ylabel('Velocity (m/s)', fontsize=10)
-        ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.3)
-        if(config["data"]["sequence"] == "outdoor_day1"):
-            if(i==2):
-                ax.set_ylim(0.0,10.0)
-            else:
-                ax.set_ylim(-1.0,1.0)
+        ax.plot(time, gt_lin[:, i], label='GT', color='#1f77b4', **plot_config)
+        ax.plot(time, eval_lin[:, i], label='PRED', color='#ff7f0e', **plot_config)
+        
+        ax.set_ylim(-1.2, 1.2) 
+        ax.set_yticks([-1.0, -0.5, 0, 0.5, 1.0])  
+        
+        if i != 2:
+            ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)      
         else:
-            ax.set_ylim(-1.2,1.2)  
-    
-    # plt.tight_layout()
-    # fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
-    
-    # plot angular velocities
-    fig_ang, axs_ang = plt.subplots(3, 1, figsize=(12, 12))
+            ax.set_xlabel('Time [s]', fontsize=10)  
+        ax.set_ylabel(f'$v_{comp.lower()}$ [m/s]', fontsize=10)       
+        ax.legend(loc='upper right')
+        ax.grid(False)
     
     for i, (ax, comp) in enumerate(zip(axs_ang, components)):
-        ax.plot(time, gt_ang[:, i], label='Ground Truth', color='#2ca02c', **plot_config)
-        ax.plot(time, eval_ang[:, i], label='Estimated', color='#d62728', linestyle='--', **plot_config)
-        ax.set_title(f'Angular Velocity - {comp} Component', fontsize=12)
+        ax.plot(time, gt_ang[:, i], label='GT', color='#2ca02c', **plot_config)
+        ax.plot(time, eval_ang[:, i], label='PRED', color='#d62728', **plot_config)
+
+        ax.set_ylim(-12, 12) 
+        ax.set_yticks([-10, -5, 0, 5, 10]) 
+        if i != 2:
+            ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)      
+        else:
+            ax.set_xlabel('Time [s]', fontsize=10)  
         if(i==2):
             ax.set_xlabel('Time (s)', fontsize=10)
-        ax.set_ylabel('Velocity (rad/s)', fontsize=10)
+        ax.set_ylabel(f'$w_{comp.lower()}$ [deg/s]', fontsize=10)
         ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.3)
-        ax.set_ylim(-1.0,1.0)
-    
-    # plt.tight_layout()
-    # fig_ang.suptitle("Angular Velocity Comparison", y=1.02, fontsize=14) 
+        ax.grid(False)
     
     return fig_lin, fig_ang
