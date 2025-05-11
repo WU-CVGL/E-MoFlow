@@ -34,7 +34,8 @@ def save_flow(file_path: Path, flow: np.ndarray):
     flow_16bit[..., 2] = 1
     imageio.imwrite(str(file_path), flow_16bit, format='PNG-FI')
 
-def fix_random_seed(seed_idx=0) -> None:
+def fix_random_seed(seed_idx=42) -> None:
+    os.environ["PYTHONHASHSEED"] = str(seed_idx)
     random.seed(seed_idx)
     np.random.seed(seed_idx)
     torch.manual_seed(seed_idx)
@@ -44,7 +45,6 @@ def fix_random_seed(seed_idx=0) -> None:
         torch.cuda.manual_seed_all(seed_idx)  
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    os.environ["PYTHONHASHSEED"] = str(0)
 
 def load_camera_intrinsic(
     file_path: str
@@ -148,7 +148,7 @@ def check_key_and_bool(config: dict, key: str) -> bool:
     """
     return key in config.keys() and config[key]
 
-def save_flow_error_as_text(
+def save_metric_as_text(
     flow_error_dict: dict, dir: str, fname: str = "metric.txt"
 ):
     save_file_name = os.path.join(dir, fname)
@@ -246,11 +246,11 @@ def visualize_velocities(
         ax.grid(True, alpha=0.3)
         if(config["data"]["sequence"] == "outdoor_day1"):
             if(i==2):
-                ax.set_ylim(2.0,4.0)
+                ax.set_ylim(0.0,10.0)
             else:
                 ax.set_ylim(-1.0,1.0)
         else:
-            ax.set_ylim(-1.0,1.0)  
+            ax.set_ylim(-1.2,1.2)  
     
     # plt.tight_layout()
     # fig_lin.suptitle("Linear Velocity Comparison", y=1.02, fontsize=14)
