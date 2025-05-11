@@ -118,10 +118,8 @@ class Pixel2Cam:
 class CubicBsplineVelocityModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.lin_ctrl_knots = nn.Parameter(torch.randn(4, 3))  
-        self.ang_ctrl_knots = nn.Parameter(torch.randn(4, 3))  
-        nn.init.normal_(self.lin_ctrl_knots, mean=0, std=0.1)
-        nn.init.normal_(self.ang_ctrl_knots, mean=0, std=0.1)
+        self.lin_ctrl_knots = nn.Parameter(0.2*torch.ones(4, 3))  
+        self.ang_ctrl_knots = nn.Parameter(0.2*torch.ones(4, 3))  
 
     def cubic_bspline_basis(self, t):
         t = t.clamp(0.0, 1.0)
