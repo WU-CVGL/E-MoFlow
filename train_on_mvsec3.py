@@ -255,6 +255,8 @@ def run_train_phase(
     rmse_lin, rmse_ang, e_lin, e_ang = [], [], [], []
     all_eval_lin_vel = torch.zeros(len(total_batch_events), 4, device=device) # shape:(N, 4)   
     all_eval_ang_vel = torch.zeros(len(total_batch_events), 4, device=device) # shape:(N, 4)
+    # motion_spline = CubicBsplineVelocityModel().to(device)
+    # flow_field = EventFlowINR(model_config).to(device)
     for i in tqdm(range(len(total_batch_events))):
         # reset model
         flow_field = EventFlowINR(model_config).to(device)
@@ -393,6 +395,7 @@ def run_train_phase(
             
             # step
             total_loss.backward()
+            total_loss = None
             nn_optimizer.step()
             nn_scheduler.step()
             if misc.check_key_and_bool(loss_config, "ssl_dec"):
@@ -405,6 +408,10 @@ def run_train_phase(
             config, i, batch_events, gt_flow, gt_motion, 
             warpper, motion_spline, flow_calculator, tools, device
         )
+        
+        del warpper.flow_field, motion_spline, nn_optimizer, spline_optimizer, nn_scheduler
+        torch.cuda.empty_cache()
+        
         epe.append(flow_metric["EPE"])
         ae.append(flow_metric["AE"])
         out.append(flow_metric["3PE"])
@@ -448,7 +455,7 @@ def run_train_phase(
     
     misc.save_metric_as_text(error_dict, config["logger"]["results_dir"])
     stats = tools.time_analyzer.get_statistics()
-    return warpper.flow_field, stats
+    return stats
 
 if __name__ == "__main__":
     # load configs
@@ -504,7 +511,7 @@ if __name__ == "__main__":
     )
     
     # trainer
-    trained_flow_field, time_stats = run_train_phase(config, dataset, criterions, tools, device)
+    time_stats = run_train_phase(config, dataset, criterions, tools, device)
     
     total_train_time = time_stats["total_train_time"]
     avg_train_time = time_stats["avg_train_time"]
@@ -518,9 +525,9 @@ if __name__ == "__main__":
     misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])
     
     # Save model
-    log_model_path = config["logger"]["model_weight_path"]
-    dir_name = os.path.dirname(log_model_path) 
-    os.makedirs(dir_name, exist_ok=True)
-    torch.save(trained_flow_field.state_dict(), log_model_path)
+    # log_model_path = config["logger"]["model_weight_path"]
+    # dir_name = os.path.dirname(log_model_path) 
+    # os.makedirs(dir_name, exist_ok=True)
+    # torch.save(trained_flow_field.state_dict(), log_model_path)
     
     # tools.wandb_logger.finish()
