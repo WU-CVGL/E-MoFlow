@@ -1,13 +1,9 @@
-import logging
-from typing import Optional
-
 import cv2
-import numpy as np
-import scipy
 import torch
-from torch.nn import functional
+import imageio
+import numpy as np
 
-logger = logging.getLogger(__name__)
+from pathlib import Path
 
 def pixel_to_normalized_coords(pixel_coords, intrinsic_matrix):
     assert pixel_coords.shape[0] == 1 and pixel_coords.shape[2] == 3, "The shape of pixel_coords should be (1, n, 3)"
@@ -148,3 +144,41 @@ def prop_flow(x_flow, y_flow, x_indices, y_indices, x_mask, y_mask, scale_factor
 
     x_indices += flow_x_interp * scale_factor
     y_indices += flow_y_interp * scale_factor
+    
+def flow_16bit_to_float(flow_16bit: np.ndarray):
+    assert flow_16bit.dtype == np.uint16
+    assert flow_16bit.ndim == 3
+    h, w, c = flow_16bit.shape
+    assert c == 3
+
+    valid2D = flow_16bit[..., 2] == 1
+    assert valid2D.shape == (h, w)
+    assert np.all(flow_16bit[~valid2D, -1] == 0)
+    valid_map = np.where(valid2D)
+
+    # to actually compute something useful:
+    flow_16bit = flow_16bit.astype('float')
+
+    flow_map = np.zeros((h, w, 2))
+    flow_map[valid_map[0], valid_map[1], 0] = (flow_16bit[valid_map[0], valid_map[1], 0] - 2 ** 15) / 128
+    flow_map[valid_map[0], valid_map[1], 1] = (flow_16bit[valid_map[0], valid_map[1], 1] - 2 ** 15) / 128
+    return flow_map, valid2D
+
+def scale_optical_flow(flow, max_flow_magnitude):
+    u, v = flow[0, :, :], flow[1, :, :]
+    magnitude = torch.sqrt(u**2 + v**2)
+    exceed_indices = magnitude > max_flow_magnitude
+
+    u[exceed_indices] = (u[exceed_indices] / magnitude[exceed_indices]) * max_flow_magnitude
+    v[exceed_indices] = (v[exceed_indices] / magnitude[exceed_indices]) * max_flow_magnitude
+
+    return torch.stack([u, v], dim=0)
+
+def save_flow(file_path: Path, flow: np.ndarray):
+    """Save the optical flow as a 16-bit PNG."""
+    height, width = flow.shape[1], flow.shape[2]
+    flow_16bit = np.zeros((height, width, 3), dtype=np.uint16)
+    flow_16bit[..., 1] = (flow[0] * 128 + 2**15).astype(np.uint16)  # y-component
+    flow_16bit[..., 0] = (flow[1] * 128 + 2**15).astype(np.uint16)  # x-component
+    imageio.v2.imwrite(str(file_path), flow_16bit, format='PNG-FI')
+
