@@ -228,7 +228,7 @@ def visualize_velocities(
     warnings.filterwarnings("ignore", message="Blended transforms not yet supported")
     
     plot_config = {
-        'lw': 1.2,
+        'lw': 2.5,
         'alpha': 0.8,
     }
     
@@ -242,7 +242,7 @@ def visualize_velocities(
         ax.plot(time, eval_lin[:, i], label='PRED', color='#ff7f0e', **plot_config)
         
         ax.set_ylim(-1.2, 1.2) 
-        ax.set_yticks([-1.0, -0.5, 0, 0.5, 1.0])  
+        ax.set_yticks([-1.0, 0, 1.0])  
         
         if i != 2:
             ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)      
@@ -256,8 +256,8 @@ def visualize_velocities(
         ax.plot(time, gt_ang[:, i], label='GT', color='#2ca02c', **plot_config)
         ax.plot(time, eval_ang[:, i], label='PRED', color='#d62728', **plot_config)
 
-        ax.set_ylim(-12, 12) 
-        ax.set_yticks([-10, -5, 0, 5, 10]) 
+        ax.set_ylim(-20, 20) 
+        ax.set_yticks([-15, 0, 15]) 
         if i != 2:
             ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)      
         else:
