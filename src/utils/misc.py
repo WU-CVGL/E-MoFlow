@@ -241,7 +241,7 @@ def visualize_velocities(
         ax.plot(time, gt_lin[:, i], label='GT', color='#1f77b4', **plot_config)
         ax.plot(time, eval_lin[:, i], label='PRED', color='#ff7f0e', **plot_config)
         
-        ax.set_ylim(-1.2, 1.2) 
+        ax.set_ylim(-1.5, 1.5) 
         ax.set_yticks([-1.0, 0, 1.0])  
         
         if i != 2:
@@ -256,8 +256,8 @@ def visualize_velocities(
         ax.plot(time, gt_ang[:, i], label='GT', color='#2ca02c', **plot_config)
         ax.plot(time, eval_ang[:, i], label='PRED', color='#d62728', **plot_config)
 
-        ax.set_ylim(-20, 20) 
-        ax.set_yticks([-15, 0, 15]) 
+        ax.set_ylim(-35, 35) 
+        ax.set_yticks([-30, 0, 30]) 
         if i != 2:
             ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)      
         else:
