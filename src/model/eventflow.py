@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from typing import List
 from src.model import embedder
 from torchdiffeq import odeint
+from torchdiffeq import odeint_adjoint
 
 class EventFlowINR(nn.Module):
     def __init__(self, config, D=8, W=256, input_ch=3, output_ch=2, skips=[4]):
@@ -63,7 +64,7 @@ class ForwardFlowODEFunc(nn.Module):
         return uv
     
 class DenseFlowExtractor:
-    def __init__(self, grid_size: List, device: torch.device):
+    def __init__(self, grid_size: List, device: torch.device, warp_config: dict):
         self.H, self.W = grid_size
         x, y = np.meshgrid(np.arange(self.W), np.arange(self.H))
         x = torch.tensor(x, dtype=torch.float32).view(-1)
@@ -73,12 +74,35 @@ class DenseFlowExtractor:
         self.y = y.to(device)
         self.device = device
         
+        required_keys = ["solver", "step_size", "rtol", "atol"]
+        missing_keys = [key for key in required_keys if key not in warp_config]
+        if missing_keys:
+            raise ValueError(f"Missing required keys in warp_config: {missing_keys}")
+        
+        for key, value in warp_config.items():
+            setattr(self, key, value)
+            
+        self.solver: str = warp_config["solver"]
+        self.step_size: float = warp_config["step_size"]
+        self.rtol: float = warp_config["rtol"]
+        self.atol: float = warp_config["atol"]
+        
     def integrate_flow(self, model, t_start, t_end, num_steps=2):
-        t = torch.linspace(t_start, t_end, num_steps).to(self.device)
+        t = torch.linspace(t_start, t_end, self.step_size).to(self.device)
+        # step_size = (t_end - t_start) / self.step_size
         initial_positions = torch.stack((self.x, self.y), dim=1)
         
         odefunc = ForwardFlowODEFunc(model, self.device)
-        solution = odeint(odefunc, initial_positions, t, method="euler")  # [num_steps, H*W, 2]
+        solution = odeint(
+            odefunc, initial_positions, t, 
+            rtol=self.rtol,
+            atol=self.atol,
+            method=self.solver, 
+            # options={
+            #     "step_size": step_size
+            # },
+        )  # [num_steps, H*W, 2]
+        
         final_positions = solution[-1]  # [H*W, 2]
         displacement = final_positions - initial_positions  # [H*W, 2]
         

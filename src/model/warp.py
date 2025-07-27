@@ -16,16 +16,26 @@ class NeuralODEWarp:
     def __init__(
         self, 
         flow_inr: EventFlowINR, 
-        device: torch.device, 
-        tref_setting: str, 
-        num_step: int, 
-        solver: str
+        device: torch.device,
+        warp_config: dict
     ) -> None:
-        self.flow_field = flow_inr       # calculate dy/dt
+        self.flow_field = flow_inr
+        # self.ode_func = ODEFunc(flow_inr)  
         self.device = device
-        self.num_step = num_step
-        self.tref_setting = tref_setting
-        self.solver = solver
+                
+        required_keys = ["tref_setting", "solver", "step_size", "rtol", "atol"]
+        missing_keys = [key for key in required_keys if key not in warp_config]
+        if missing_keys:
+            raise ValueError(f"Missing required keys in warp_config: {missing_keys}")
+        
+        for key, value in warp_config.items():
+            setattr(self, key, value)
+            
+        self.tref_setting: str = warp_config["tref_setting"]
+        self.solver: str = warp_config["solver"]
+        self.num_step: float = warp_config["step_size"]
+        self.rtol: float = warp_config["rtol"]
+        self.atol: float = warp_config["atol"]
         
     def get_reference_time(self, batch_txy: torch.Tensor, tref_setting: str):
         """
@@ -229,17 +239,17 @@ class NeuralODEWarpV2(nn.Module):
     def warp_events(self, batch_txy: torch.Tensor, t_ref: torch.Tensor):
         augmented_init = self._build_augmented_state(batch_txy, t_ref)
         t_eval = torch.tensor([0.0, 1.0], device=self.device)
-        
+        step_size = (t_eval[1] - t_eval[0]) / self.step_size
         solution = odeint(
             self.ode_func,
             augmented_init,
             t_eval,
-            method=self.solver,
-            options={
-                "step_size": self.step_size
-            },
             rtol=self.rtol,
-            atol=self.atol
+            atol=self.atol,
+            method=self.solver,
+            # options={
+            #     "step_size": step_size
+            # },
         )
         
         final_state = solution[-1]
