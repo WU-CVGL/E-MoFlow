@@ -52,6 +52,7 @@ class EventImager(object):
         self,
         events: NUMPY_TORCH,
         method: str = "bilinear_vote",
+        weights: Union[NUMPY_TORCH, FLOAT_TORCH] = 1.0,
         sigma: int = 1,
         blur: bool = True
     ) -> NUMPY_TORCH:
@@ -68,7 +69,7 @@ class EventImager(object):
         if is_numpy(events):
             iwes = self.create_image_from_events_numpy(events, method, sigma=sigma)
         elif is_torch(events):
-            iwes = self.create_image_from_events_tensor(events, method, sigma=sigma, blur=blur)
+            iwes = self.create_image_from_events_tensor(events, method, weight=weights, sigma=sigma, blur=blur)
         else:
             e = f"Non-supported type of events. {type(events)}"
             logger.error(e)
