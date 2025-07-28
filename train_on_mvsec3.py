@@ -27,7 +27,9 @@ from src.loss.dec import DifferentialEpipolarLoss
 from src.model.warp import NeuralODEWarpV2
 from src.model.eventflow import EventFlowINR, DenseFlowExtractor
 from src.model.geometric import Pixel2Cam, CubicBsplineVelocityModel
+from src.model.early_stopping import EarlyStopping, EarlyStoppingMode, EarlyStoppingStats
 from src.model.scheduler import create_exponential_scheduler
+
 
 from src.utils.wandb import WandbLogger
 from src.utils.timer import TimeAnalyzer
@@ -72,11 +74,16 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
     total_batch_gt_flow = []
     gt_flow_save_dir = os.path.join(config["logger"]["results_dir"], "gt_flow")
     origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
+    txt_save_dir = os.path.join(config["logger"]["results_dir"], "output.txt")
     
     for i1 in tqdm(
         range(len(eval_frame_timestamp_list) - eval_dt), 
         desc=f"Divide the event stream into {eval_dt}-frame intervals", leave=True
     ):  
+        # if(i1!=419):
+        #     continue
+        # else:
+            
         t1 = eval_frame_timestamp_list[i1]
         t2 = eval_frame_timestamp_list[i1 + eval_dt]
     
@@ -85,16 +92,10 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
         batch_events[..., 2] -= dataset.min_ts
         gt_flow = dataset.load_optical_flow(t1, t2)
         if ind2 - ind1 < n_events:
-            # logger.info(
-            #     f"Less events in one GT flow sequence. Events: {ind2-ind1} / Expected: {n_events}"
-            # )
             insufficient = n_events - (ind2 - ind1)
             ind1 -= insufficient // 2
             ind2 += insufficient // 2
         elif ind2 - ind1 > n_events:
-            # logger.info(
-            #     f"Too many events in one GT flow sequence. Events: {ind2-ind1} / Expected: {n_events}"
-            # )
             ind1 = ind2 - n_events
         
         batch_events_for_train = dataset.load_event(max(ind1, 0), min(ind2, len(dataset)))
@@ -115,6 +116,8 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
             visualize_color_wheel=True,
             file_prefix="gt_flow_"
         )
+        # fmt = ["%d", "%d", "%f", "%d"]
+        # np.savetxt(txt_save_dir, batch_events_for_train, fmt=fmt, delimiter=" ")
         
         total_batch_events.append(batch_events)
         total_batch_events_for_train.append(batch_events_for_train)
@@ -214,9 +217,21 @@ def run_train_phase(
     warp_config = config["warp"]
     loss_config = config["loss"]
     optimizer_config = config["optimizer"]
+    early_stopping_config = config.get("early_stopping", {})
+    use_early_stopping = early_stopping_config.get("enabled", False)
+    
+    # stats of early stopping
+    early_stopping_stats = EarlyStoppingStats(
+        segment_iterations=[],
+        early_stopped_segments=[],
+        total_segments=0
+    )
     
     # split events
     total_batch_events, total_batch_events_for_train, total_batch_gt_flow = split_events(config=config, dataset=dataset, viz=tools.viz)
+    
+    # number of total segments
+    early_stopping_stats.total_segments = len(total_batch_events)
     
     # get gt motion spline
     gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
@@ -249,7 +264,7 @@ def run_train_phase(
         device
     )
     image_coords = pixel2cam_converter.generate_image_coordinate()
-    flow_calculator = DenseFlowExtractor(grid_size=image_size, device=device)
+    flow_calculator = DenseFlowExtractor(grid_size=image_size, device=device, warp_config=warp_config)
     
     epe, ae, out = [], [], []
     rmse_lin, rmse_ang, e_lin, e_ang = [], [], [], []
@@ -264,6 +279,16 @@ def run_train_phase(
         motion_spline = CubicBsplineVelocityModel().to(device)
         nn_optimizer = optim.Adam(warpper.flow_field.parameters())
         spline_optimizer = optim.Adam(motion_spline.parameters(), lr=optimizer_config["spline_lr"])
+        
+        use_early_stopping = early_stopping_config["enabled"]
+        if use_early_stopping:
+            early_stopping = EarlyStopping(
+                burn_in_steps=early_stopping_config.get("burn_in_steps", 100),
+                mode=EarlyStoppingMode.MIN,
+                min_delta=early_stopping_config.get("min_delta", 1e-6),
+                patience=early_stopping_config.get("patience", 50),
+                percentage=False
+            )
         
         # learning rate scheduler
         num_iters = optimizer_config["num_iters"]
@@ -285,6 +310,8 @@ def run_train_phase(
         print(f"Segment {i}")
 
         iter = 0
+        early_stopped = False
+        actual_iterations = 0
         tools.time_analyzer.start_epoch()
         for j, idx in enumerate(tqdm(shuffled_indices)):
             # reset optimizer
@@ -395,13 +422,24 @@ def run_train_phase(
             
             # step
             total_loss.backward()
-            total_loss = None
             nn_optimizer.step()
             nn_scheduler.step()
             if misc.check_key_and_bool(loss_config, "ssl_dec"):
                 spline_optimizer.step()
             iter+=1  
+            actual_iterations = j + 1
             
+            if use_early_stopping:
+                current_loss = total_loss.item()
+                if early_stopping.step(current_loss):
+                    logger.info(f"Early stopping triggered at iteration {j} for segment {i}")
+                    logger.info(f"Best training loss: {early_stopping.best:.6f}")
+                    logger.info(f"Current loss: {current_loss:.6f}")
+                    early_stopped = True
+                    break
+                
+        early_stopping_stats.add_segment_result(i, actual_iterations, early_stopped)
+        
         tools.time_analyzer.end_epoch()
         
         flow_metric, motion_metric, eval_motion = run_valid_phase(
@@ -410,6 +448,8 @@ def run_train_phase(
         )
         
         del warpper.flow_field, motion_spline, nn_optimizer, spline_optimizer, nn_scheduler
+        if use_early_stopping:
+            del early_stopping
         torch.cuda.empty_cache()
         
         epe.append(flow_metric["EPE"])
@@ -453,6 +493,7 @@ def run_train_phase(
         "ERROR_angular": np.mean(e_ang)
     }
     
+    early_stopping_stats.save_to_file(config["logger"]["results_dir"])
     misc.save_metric_as_text(error_dict, config["logger"]["results_dir"])
     stats = tools.time_analyzer.get_statistics()
     return stats
