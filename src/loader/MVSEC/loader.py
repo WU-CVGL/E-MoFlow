@@ -199,7 +199,7 @@ class MVSECDataLoader(DataLoaderBase):
             last_valid_gt_frame = 5020
         elif "outdoor_day2" in sequence_name:
             first_valid_gt_frame = 30
-            # last_valid_gt_frame = 5020
+            last_valid_gt_frame = 5020
             
         # print(np.array_equal(self.gt_timestamps, self.gt_motion_timestamps))
         self.gt_timestamps = self.gt_timestamps[first_valid_gt_frame:last_valid_gt_frame]
@@ -384,6 +384,24 @@ class MVSECDataLoader(DataLoaderBase):
                     -0.01537260902537579,
                     -0.022284741346941413,
                     0.0069204143687187645,
+                ],
+                dtype=np.float32,
+            )
+        elif(sequence_name[:-1] == "outdoor_night"):
+            intrinsics_mat = np.array(
+                [
+                    [225.7028124771077, 0, 167.3925764568589],
+                    [0, 225.3928747331328, 126.81201949043754],
+                    [0, 0, 1],
+                ],
+                dtype=np.float32,
+            )
+            distortion_coeffs = np.array(
+                [
+                    -0.03428189402216791,
+                    -0.008244485612566636,
+                    -0.05856749008961831,
+                    0.03790469751870957,
                 ],
                 dtype=np.float32,
             )

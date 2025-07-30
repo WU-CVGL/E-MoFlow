@@ -62,7 +62,7 @@ def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
     eval_dt = data_config["eval_dt"]
     n_events = data_config["n_events_per_batch"]
     eval_frame_timestamp_list = dataset.eval_frame_time_list() 
-    if data_config["sequence"] == "outdoor_day1":
+    if data_config["sequence"] in ["outdoor_day1", "outdoor_day2"]:
         eval_frame_timestamp_list = eval_frame_timestamp_list[
             data_config["valid_frame_1"] : data_config["valid_frame_2"]
         ]
@@ -235,7 +235,7 @@ def run_train_phase(
     
     # get gt motion spline
     gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
-    if data_config["sequence"] == "outdoor_day1":
+    if if data_config["sequence"] in ["outdoor_day1", "outdoor_day2"]:
         valid_t_min = np.min(total_batch_events[0][:, 2])
         valid_t_max = np.max(total_batch_events[-1][:, 2])
         gt_lin_vel_array = gt_lin_vel_array[
