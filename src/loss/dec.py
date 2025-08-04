@@ -4,7 +4,7 @@ import torch.nn as nn
 from src.utils.vector_math import vec2skewmat
 
 class DifferentialEpipolarLoss(nn.Module):
-    def __init__(self, delta=1.0, use_huber=True):
+    def __init__(self, delta=0.1, use_huber=True):
         super(DifferentialEpipolarLoss, self).__init__()
         self.delta = delta  
         self.use_huber = use_huber  
