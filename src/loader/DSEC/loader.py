@@ -95,119 +95,107 @@ class DSECSequence(Dataset):
             self.h5f_events.close()
         if hasattr(self, 'h5f_rectify') and self.h5f_rectify:
             self.h5f_rectify.close()
-
-    # def get_data_sample(self, index, flip=None):
-    #     """Get a sample from the dataset."""
-    #     t_start, t_end = self.timestamps_flow[index]
-    #     file_index = self.indices[index]
-
-    #     output = {
-    #         'name': f'{self.name}_{str(file_index).zfill(6)}',
-    #         'timestamp': torch.tensor([t_start, t_end]),
-    #         'file_index': torch.tensor(file_index, dtype=torch.int64)
-    #     }
-
-    #     # Unrectified events
-    #     event_data = self.event_slicer.get_events(t_start, t_end)
-    #     raw_events = np.column_stack((event_data['y'], event_data['x'], event_data['t'], event_data['p']))
-    #     raw_mask = (0 <= raw_events[:, 0]) & (raw_events[:, 0] < self.height) & (0 <= raw_events[:, 1]) & (raw_events[:, 1] < self.width)
-    #     raw_events = raw_events[raw_mask].astype('float32')
-    #     output['raw_events'] = torch.from_numpy(raw_events)
+    
+    def adaptive_spatiotemporal_sampling(self, events, max_events, device='cuda'):
+        if len(events) <= max_events:
+            return events
         
-    #     # Rectified events
-    #     x_rect, y_rect = self.rectify_events(event_data['x'], event_data['y']).T
-    #     # t = (event_data['t'] - event_data['t'].min()) / (event_data['t'].max() - event_data['t'].min())
-    #     # t = (event_data['t'] - event_data['t'].min()) * 1.0e-6 * 5000
-    #     t = (event_data['t'] - self.timestamps_flow[0][0]) * 1.0e-6
-    #     events = np.column_stack((y_rect, x_rect, t, event_data['p']))
-    #     mask = (0 <= events[:, 0]) & (events[:, 0] < self.height) & (0 <= events[:, 1]) & (events[:, 1] < self.width)
-    #     events = events[mask].astype('float32')
-    #     output['events'] = torch.from_numpy(events)
+        events_gpu = torch.from_numpy(events).to(device)
+        n_events = len(events_gpu)
+        
+        spatial_range = (events_gpu[:, :2].max(dim=0)[0] - events_gpu[:, :2].min(dim=0)[0])
+        temporal_range = events_gpu[:, 2].max() - events_gpu[:, 2].min()
+    
+        spatial_bins = max(10, min(100, int(torch.sqrt(spatial_range.prod()).item() / 10)))
+        time_resolution = 0.01  # 10ms
+        temporal_bins = max(5, min(50, int(temporal_range / time_resolution)))
+        
+        return self.spatiotemporal_density_sampling(
+            events, max_events, spatial_bins, temporal_bins, device
+        )
+    
+    def spatiotemporal_density_sampling(self, events, max_events, spatial_bins=50, temporal_bins=20, device='cuda'):
+        """ Perform spatiotemporal density sampling on events."""
+        if len(events) <= max_events:
+            return events
+        
+        events_gpu = torch.from_numpy(events).to(device)
+        n_events = len(events_gpu)
+        
+        # spatial bin
+        x_max, y_max = events_gpu[:, 1].max(), events_gpu[:, 0].max()
+        x_edges = torch.linspace(0, x_max, spatial_bins + 1, device=device)
+        y_edges = torch.linspace(0, y_max, spatial_bins + 1, device=device)
+        
+        # temporal bin
+        t_min, t_max = events_gpu[:, 2].min(), events_gpu[:, 2].max()
+        t_edges = torch.linspace(t_min, t_max, temporal_bins + 1, device=device)
+        
+        # calc spatial-temporal bin indices
+        x_bin_idx = torch.searchsorted(x_edges[1:], events_gpu[:, 1])
+        y_bin_idx = torch.searchsorted(y_edges[1:], events_gpu[:, 0])
+        t_bin_idx = torch.searchsorted(t_edges[1:], events_gpu[:, 2])
+        
+        # calc density in each bin
+        bin_ids = (t_bin_idx * spatial_bins * spatial_bins + 
+                y_bin_idx * spatial_bins + 
+                x_bin_idx)
+        unique_bins, inverse_indices, counts = torch.unique(
+            bin_ids, return_inverse=True, return_counts=True
+        )
+        
+        # calc density weights
+        total_bins = spatial_bins * spatial_bins * temporal_bins
+        target_density = n_events / total_bins
+        densities = counts[inverse_indices].float()
+        density_weights = 1.0 / (1.0 + torch.abs(densities - target_density) / (target_density + 1e-6))
+        
+        # sample
+        if density_weights.sum() > 0:
+            weights = density_weights / density_weights.sum()
+            selected_indices = torch.multinomial(weights, max_events, replacement=False)
+        else:
+            selected_indices = torch.randperm(n_events, device=device)[:max_events]
+        
+        return events[selected_indices.cpu().numpy()]
 
-    #     return output
     
     def get_data_sample(self, index, flip=None):
         """Get a sample from the dataset."""
-        original_t_start, original_t_end = self.timestamps_flow[index]
+        t_start, t_end = self.timestamps_flow[index]
+        t_step = (t_end - t_start) 
+        t_end = t_start + t_step
         file_index = self.indices[index]
 
         output = {
             'name': f'{self.name}_{str(file_index).zfill(6)}',
-            'timestamp': torch.tensor([original_t_start, original_t_end]),
+            'timestamp': torch.tensor([t_start, t_end]),
             'file_index': torch.tensor(file_index, dtype=torch.int64)
         }
 
-        # 目标事件数量
-        target_num = 1500000  # 1.5M events
-
-        # 转换为相对于event_slicer的时间
-        t_start_rel = original_t_start - self.event_slicer.t_offset
-        t_end_rel = original_t_end - self.event_slicer.t_offset
-
-        # 计算初始毫秒窗口
-        t_start_ms = t_start_rel // 1000
-        t_end_ms = t_end_rel // 1000
-
-        # 获取初始索引范围
-        start_idx = self.event_slicer.ms2idx(t_start_ms)
-        end_idx = self.event_slicer.ms2idx(t_end_ms)
-
-        # 处理索引越界情况
-        if start_idx is None:
-            start_idx = 0
-        if end_idx is None:
-            end_idx = len(self.event_slicer.events['t'])
-
-        current_num = end_idx - start_idx
-
-        # 动态调整索引范围
-        if current_num < target_num:
-            # 扩展索引范围
-            insufficient = target_num - current_num
-            start_idx = max(start_idx - insufficient // 2, 0)
-            end_idx = min(end_idx + insufficient - insufficient//2, len(self.event_slicer.events['t']))
-            current_num = end_idx - start_idx
-            
-            # 确保最终数量不小于目标值
-            if current_num < target_num:
-                end_idx = min(start_idx + target_num, len(self.event_slicer.events['t']))
-        elif current_num > target_num:
-            # 截断到目标数量
-            start_idx = max(end_idx - target_num, 0)
-
-        # 计算新时间窗口
-        try:
-            adjusted_t_start = self.event_slicer.events['t'][start_idx] + self.event_slicer.t_offset
-            adjusted_t_end = self.event_slicer.events['t'][end_idx-1] + self.event_slicer.t_offset
-        except IndexError:
-            adjusted_t_start = original_t_start
-            adjusted_t_end = original_t_end
-
-        # 获取调整后的事件数据
-        event_data = self.event_slicer.get_events(adjusted_t_start, adjusted_t_end)
-        if event_data is None:
-            event_data = {'x': np.array([]), 'y': np.array([]), 't': np.array([]), 'p': np.array([])}
-
-        # 最终数量调整
-        n_events = len(event_data['x'])
-        if n_events > target_num:
-            # 保留最后1.5M事件
-            event_data = {k: v[-target_num:] for k, v in event_data.items()}
-
-        # 处理原始事件
+        # Unrectified events
+        event_data = self.event_slicer.get_events(t_start, t_end)
         raw_events = np.column_stack((event_data['y'], event_data['x'], event_data['t'], event_data['p']))
-        raw_mask = (0 <= raw_events[:, 0]) & (raw_events[:, 0] < self.height) & \
-                (0 <= raw_events[:, 1]) & (raw_events[:, 1] < self.width)
+        raw_mask = (0 <= raw_events[:, 0]) & (raw_events[:, 0] < self.height) & (0 <= raw_events[:, 1]) & (raw_events[:, 1] < self.width)
         raw_events = raw_events[raw_mask].astype('float32')
+        # output['raw_events'] = torch.from_numpy(raw_events[raw_events[:, 3] == 1])
         output['raw_events'] = torch.from_numpy(raw_events)
-
-        # 处理矫正事件
+        
+        # Rectified events
         x_rect, y_rect = self.rectify_events(event_data['x'], event_data['y']).T
-        t = (event_data['t'] - event_data['t'].min()) * 1.0e-6
+        # t = (event_data['t'] - event_data['t'].min()) / (event_data['t'].max() - event_data['t'].min())
+        # t = (event_data['t'] - event_data['t'].min()) * 1.0e-6 * 5000
+        t = (event_data['t'] - self.timestamps_flow[0][0]) * 1.0e-6
         events = np.column_stack((y_rect, x_rect, t, event_data['p']))
-        mask = (0 <= events[:, 0]) & (events[:, 0] < self.height) & \
-            (0 <= events[:, 1]) & (events[:, 1] < self.width)
+        mask = (0 <= events[:, 0]) & (events[:, 0] < self.height) & (0 <= events[:, 1]) & (events[:, 1] < self.width)
         events = events[mask].astype('float32')
+        # output['events'] = torch.from_numpy(events[events[:, 3] == 1])
+        output['events'] = torch.from_numpy(events)
+        n_events = events.shape[0]   
+        max_limit_events = 1500000
+        if n_events >= max_limit_events:
+            events = self.adaptive_spatiotemporal_sampling(events, max_limit_events)
+            
         output['events'] = torch.from_numpy(events)
         return output
 
