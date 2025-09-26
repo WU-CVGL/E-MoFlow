@@ -7,7 +7,7 @@ data:
   hight: 260
   width: 346
   eval_dt: 1
-  n_events_per_batch: 30000
+  n_events_per_batch: 40000
   remove_car: True
   valid_frame_1: 10157
   valid_frame_2: 10957  
@@ -18,15 +18,15 @@ data:
     pin_memory: True
 
 logger:
-  project: mvsec_results_test_n_events
-  expname: nn_8_lr_1e-4~6.3e-5_outdoor_day_1_all_sequence_dt_1
+  project: mvsec_full_model_results
+  expname: outdoor_day_1_dt_1
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
 loss:
   cmax: True
-  ssl_dec: False
-  sl_dec: True
+  ssl_dec: True
+  sl_dec: False
 
 model:
   pos_encode: False
@@ -44,3 +44,10 @@ warp:
   step_size: 10
   rtol: 1.0e-7
   atol: 1.0e-9
+
+early_stopping:
+  enabled: True
+  burn_in_steps: 300     
+  patience: 45          
+  min_delta: 1.0e-3       
+  percentage: false  

@@ -3,11 +3,11 @@ data:
   data_path: "/run/determined/workdir/data/MVSEC/hdf5"
   load_gt_flow: True
   gt_path: "/run/determined/workdir/data/MVSEC/flow_gt"
-  sequence: "indoor_flying3"
+  sequence: "outdoor_night1"
   hight: 260
   width: 346
   eval_dt: 4
-  n_events_per_batch: 30000
+  n_events_per_batch: 40000
   loader:
     num_workers: 16
     batch_size: 32
@@ -16,7 +16,7 @@ data:
 
 logger:
   project: mvsec_full_model_results
-  expname: indoor_flying_3_dt_4
+  expname: outdoor_night_1_dt_4
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 

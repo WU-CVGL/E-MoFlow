@@ -15,8 +15,8 @@ data:
     pin_memory: True
 
 logger:
-  project: mvsec_results_test_n_events
-  expname: nn_8_lr_1e-4~6.3e-5_indoor_flying_1_all_sequence_dt_1
+  project: mvsec_full_model_results
+  expname: indoor_flying_1_dt_1
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
@@ -41,3 +41,10 @@ warp:
   step_size: 10
   rtol: 1.0e-7
   atol: 1.0e-9
+
+early_stopping:
+  enabled: True
+  burn_in_steps: 300     
+  patience: 45          
+  min_delta: 1.0e-3       
+  percentage: false  

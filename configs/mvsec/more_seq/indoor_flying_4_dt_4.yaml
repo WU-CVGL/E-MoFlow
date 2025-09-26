@@ -3,7 +3,7 @@ data:
   data_path: "/run/determined/workdir/data/MVSEC/hdf5"
   load_gt_flow: True
   gt_path: "/run/determined/workdir/data/MVSEC/flow_gt"
-  sequence: "indoor_flying3"
+  sequence: "indoor_flying4"
   hight: 260
   width: 346
   eval_dt: 4
@@ -16,7 +16,7 @@ data:
 
 logger:
   project: mvsec_full_model_results
-  expname: indoor_flying_3_dt_4
+  expname: indoor_flying_4_dt_4
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
 
@@ -45,6 +45,6 @@ warp:
 early_stopping:
   enabled: True
   burn_in_steps: 300     
-  patience: 45          
+  patience: 45       
   min_delta: 1.0e-3       
   percentage: false     
