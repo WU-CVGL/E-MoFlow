@@ -1,7 +1,6 @@
 import os
 import cv2
 import torch
-import logging
 import numpy as np
 
 from matplotlib import pyplot as plt
@@ -9,7 +8,8 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import Any, Dict, List, Optional
 from src.utils.event_imager import EventImager
 
-logger = logging.getLogger(__name__)
+from src.utils.logger import get_logger
+logger = get_logger()
 
 TRANSPARENCY = 0.25  # Degree of transparency, 0-100%
 OPACITY = int(255 * TRANSPARENCY)

@@ -2,7 +2,6 @@ import os
 import math
 import torch
 import random
-import logging
 import numpy as np
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt
@@ -10,7 +9,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import List, Union
 
-logger = logging.getLogger(__name__)
+from src.utils.logger import get_logger
+logger = get_logger()
 
 def load_optical_flow(flow_path):
     """Load optical flow map and return the horizontal and vertical component tensors"""

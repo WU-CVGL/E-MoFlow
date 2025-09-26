@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Optional, Tuple, Union
 
 import numpy as np
@@ -15,7 +14,8 @@ def is_torch(arr: Any) -> bool:
 def is_numpy(arr: Any) -> bool:
     return isinstance(arr, np.ndarray)
 
-logger = logging.getLogger(__name__)
+from src.utils.logger import get_logger
+logger = get_logger()
 
 class EventImager(object):
     """Converter class of image into many different representations as an image.

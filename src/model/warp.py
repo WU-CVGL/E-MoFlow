@@ -1,6 +1,5 @@
 import torch
 import random
-import logging
 import torch.nn as nn
 
 from typing import Dict
@@ -8,9 +7,11 @@ from torchdiffeq import odeint
 from torchdiffeq import odeint_adjoint
 from src.model.eventflow import EventFlowINR
 
+from src.utils.logger import get_logger
+logger = get_logger()
+
 EPS = 1e-5
 
-logger = logging.getLogger(__name__)
 
 class NeuralODEWarp:
     def __init__(

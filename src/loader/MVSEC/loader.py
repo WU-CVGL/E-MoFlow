@@ -1,6 +1,4 @@
 import os
-import logging
-
 import h5py
 import numpy as np
 
@@ -8,7 +6,8 @@ from typing import Tuple
 from .base import DataLoaderBase
 from ...utils import event_proc, flow_proc
 
-logger = logging.getLogger(__name__)
+from src.utils.logger import get_logger
+logger = get_logger()
 
 # hdf5 data loader
 def h5py_loader(path: str):

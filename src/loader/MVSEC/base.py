@@ -1,10 +1,10 @@
 import os
-import logging
 import numpy as np
 
 from ...utils import misc
 
-logger = logging.getLogger(__name__)
+from src.utils.logger import get_logger
+logger = get_logger()
 
 class DataLoaderBase(object):
     """Base of the DataLoader class.

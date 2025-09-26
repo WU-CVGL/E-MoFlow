@@ -1,9 +1,8 @@
 import torch
 from torch import nn
 
-import logging
-
-logger = logging.getLogger(__name__)
+from src.utils.logger import get_logger
+logger = get_logger()
 
 class Embedder:
     def __init__(self, **kwargs):
