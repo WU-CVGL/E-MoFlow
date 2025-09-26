@@ -87,7 +87,7 @@ class EarlyStoppingStats:
     """statistics for early stopping"""
     segment_iterations: List[int]       # real iterations per segment
     early_stopped_segments: List[int]   # indices of segments that were early stopped
-    total_segments: int                 # total number of segments
+    total_batchs: int                 # total number of segments
     
     def add_segment_result(self, segment_idx: int, iterations: int, early_stopped: bool):
         """add result for a segment"""
@@ -101,7 +101,7 @@ class EarlyStoppingStats:
     
     def get_early_stopping_rate(self) -> float:
         """rate of early stopped segments"""
-        return len(self.early_stopped_segments) / self.total_segments if self.total_segments > 0 else 0.0
+        return len(self.early_stopped_segments) / self.total_batchs if self.total_batchs > 0 else 0.0
     
     def get_early_stopped_average_iterations(self) -> float:
         """get average iterations for early stopped segments"""
@@ -112,7 +112,7 @@ class EarlyStoppingStats:
     
     def get_completed_average_iterations(self) -> float:
         """get average iterations for completed segments"""
-        completed_segments = [i for i in range(self.total_segments) if i not in self.early_stopped_segments]
+        completed_segments = [i for i in range(self.total_batchs) if i not in self.early_stopped_segments]
         if not completed_segments:
             return 0.0
         completed_iterations = [self.segment_iterations[i] for i in completed_segments]
@@ -126,9 +126,9 @@ class EarlyStoppingStats:
             f.write("EARLY STOPPING STATISTICS\n")
             f.write("="*50 + "\n\n")
             
-            f.write(f"Total segments: {self.total_segments}\n")
+            f.write(f"Total segments: {self.total_batchs}\n")
             f.write(f"Early stopped segments: {len(self.early_stopped_segments)} ({self.get_early_stopping_rate():.2%})\n")
-            f.write(f"Completed segments: {self.total_segments - len(self.early_stopped_segments)}\n\n")
+            f.write(f"Completed segments: {self.total_batchs - len(self.early_stopped_segments)}\n\n")
             
             f.write(f"Average iterations per segment: {self.get_average_iterations():.2f}\n")
             f.write(f"Average iterations (early stopped): {self.get_early_stopped_average_iterations():.2f}\n")
