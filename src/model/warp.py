@@ -77,7 +77,7 @@ class NeuralODEWarp:
             method (str): Integration method - 'euler' or 'rk4'.
         
         Returns:
-            torch.Tensor: Warped batch_txy.`    
+            torch.Tensor: Warped batch_txy.
         """
         batch_t0 = batch_txy[:, 0].unsqueeze(1)
         t_step = ((t_ref - batch_t0) / self.num_step).transpose(0, 1)
