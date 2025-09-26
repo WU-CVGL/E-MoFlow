@@ -1,0 +1,40 @@
+data:
+  dataset_name: "DSEC"
+  data_path: "/run/determined/workdir/data/DSEC/test_events"
+  timestamp_path: "/run/determined/workdir/data/DSEC/test_forward_optical_flow_timestamps"
+  sequence: "zurich_city_12_a"
+  hight: 480
+  width: 640
+  loader:
+    num_workers: 16
+    batch_size: 32
+    shuffle: True
+    pin_memory: True
+
+logger:
+  project: dsec_350k_events_10000_iter_lr_decay_spline_ode_10
+  expname: zurich_city_12_a
+  results_dir: ./outputs/${project}/${expname}
+  model_weight_path: ./weights/${project}_${expname}.pth
+
+loss:
+  cmax: True
+  ssl_dec: True
+  sl_dec: False
+
+model:
+  pos_encode: False
+  multires: 2
+
+optimizer:
+  nn_initial_lr: 1.0e-4
+  nn_final_lr: 1.0e-6
+  spline_lr: 1.0e-3
+  num_iters: 10000
+
+warp:
+  tref_setting: "random"
+  solver: "euler"
+  step_size: 10
+  rtol: 1.0e-7
+  atol: 1.0e-9
