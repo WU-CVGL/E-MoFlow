@@ -158,7 +158,6 @@ class DSECSequence(Dataset):
             selected_indices = torch.randperm(n_events, device=device)[:max_events]
         
         return events[selected_indices.cpu().numpy()]
-
     
     def get_data_sample(self, index, flip=None):
         """Get a sample from the dataset."""
@@ -178,21 +177,23 @@ class DSECSequence(Dataset):
         raw_events = np.column_stack((event_data['y'], event_data['x'], event_data['t'], event_data['p']))
         raw_mask = (0 <= raw_events[:, 0]) & (raw_events[:, 0] < self.height) & (0 <= raw_events[:, 1]) & (raw_events[:, 1] < self.width)
         raw_events = raw_events[raw_mask].astype('float32')
-        # output['raw_events'] = torch.from_numpy(raw_events[raw_events[:, 3] == 1])
         output['raw_events'] = torch.from_numpy(raw_events)
         
-        # Rectified events
+        # Rectified pixel coordinates
         x_rect, y_rect = self.rectify_events(event_data['x'], event_data['y']).T
-        # t = (event_data['t'] - event_data['t'].min()) / (event_data['t'].max() - event_data['t'].min())
-        # t = (event_data['t'] - event_data['t'].min()) * 1.0e-6 * 5000
-        t = (event_data['t'] - self.timestamps_flow[0][0]) * 1.0e-6
+
+        # normalize t to seconds
+        t = event_data['t'] * 1.0e-6 - self.timestamps_flow[0][0] * 1.0e-6
+        
+        # events ready to train
         events = np.column_stack((y_rect, x_rect, t, event_data['p']))
         mask = (0 <= events[:, 0]) & (events[:, 0] < self.height) & (0 <= events[:, 1]) & (events[:, 1] < self.width)
         events = events[mask].astype('float32')
-        # output['events'] = torch.from_numpy(events[events[:, 3] == 1])
         output['events'] = torch.from_numpy(events)
+        
+        # sample events if too many
         n_events = events.shape[0]   
-        max_limit_events = 1500000
+        max_limit_events = 350000
         if n_events >= max_limit_events:
             events = self.adaptive_spatiotemporal_sampling(events, max_limit_events)
             
