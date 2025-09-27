@@ -9,6 +9,8 @@ class EarlyStoppingMode(enum.Enum):
     MIN = "min"
     MAX = "max"
 
+from src.utils.logger import get_logger
+logger = get_logger()
 
 class EarlyStopping:
     def __init__(
@@ -60,7 +62,7 @@ class EarlyStopping:
             return False
 
         if np.isnan(perf_metric):
-            print("WARNING: NaN detected in performance metric. Early stopping.")
+            logger.debug("WARNING: NaN detected in performance metric. Early stopping.")
             return True
 
         if self._is_better(perf_metric):
@@ -70,7 +72,7 @@ class EarlyStopping:
             self.num_bad_epochs += 1
 
         if self.num_bad_epochs >= self.patience:
-            print(
+            logger.debug(
                 f"Early stopping after {self.total_steps} steps with {self.num_bad_epochs} bad epochs (patience: {self.patience})."
             )
             return True
@@ -85,37 +87,37 @@ class EarlyStopping:
 @dataclass
 class EarlyStoppingStats:
     """statistics for early stopping"""
-    segment_iterations: List[int]       # real iterations per segment
-    early_stopped_segments: List[int]   # indices of segments that were early stopped
-    total_batchs: int                 # total number of segments
+    batch_iterations: List[int]       # real iterations per batch
+    early_stopped_batchs: List[int]   # indices of batchs that were early stopped
+    total_batchs: int                 # total number of batchs
     
-    def add_segment_result(self, segment_idx: int, iterations: int, early_stopped: bool):
-        """add result for a segment"""
-        self.segment_iterations.append(iterations)
+    def add_batch_result(self, batch_idx: int, iterations: int, early_stopped: bool):
+        """add result for a batch"""
+        self.batch_iterations.append(iterations)
         if early_stopped:
-            self.early_stopped_segments.append(segment_idx)
+            self.early_stopped_batchs.append(batch_idx)
     
     def get_average_iterations(self) -> float:
-        """get average iterations per segment"""
-        return np.mean(self.segment_iterations) if self.segment_iterations else 0.0
+        """get average iterations per batch"""
+        return np.mean(self.batch_iterations) if self.batch_iterations else 0.0
     
     def get_early_stopping_rate(self) -> float:
-        """rate of early stopped segments"""
-        return len(self.early_stopped_segments) / self.total_batchs if self.total_batchs > 0 else 0.0
+        """rate of early stopped batchs"""
+        return len(self.early_stopped_batchs) / self.total_batchs if self.total_batchs > 0 else 0.0
     
     def get_early_stopped_average_iterations(self) -> float:
-        """get average iterations for early stopped segments"""
-        if not self.early_stopped_segments:
+        """get average iterations for early stopped batchs"""
+        if not self.early_stopped_batchs:
             return 0.0
-        early_stopped_iterations = [self.segment_iterations[i] for i in self.early_stopped_segments]
+        early_stopped_iterations = [self.batch_iterations[i] for i in self.early_stopped_batchs]
         return np.mean(early_stopped_iterations)
     
     def get_completed_average_iterations(self) -> float:
-        """get average iterations for completed segments"""
-        completed_segments = [i for i in range(self.total_batchs) if i not in self.early_stopped_segments]
-        if not completed_segments:
+        """get average iterations for completed batchs"""
+        completed_batchs = [i for i in range(self.total_batchs) if i not in self.early_stopped_batchs]
+        if not completed_batchs:
             return 0.0
-        completed_iterations = [self.segment_iterations[i] for i in completed_segments]
+        completed_iterations = [self.batch_iterations[i] for i in completed_batchs]
         return np.mean(completed_iterations)
     
     def save_to_file(self, save_dir: str):
@@ -126,20 +128,20 @@ class EarlyStoppingStats:
             f.write("EARLY STOPPING STATISTICS\n")
             f.write("="*50 + "\n\n")
             
-            f.write(f"Total segments: {self.total_batchs}\n")
-            f.write(f"Early stopped segments: {len(self.early_stopped_segments)} ({self.get_early_stopping_rate():.2%})\n")
-            f.write(f"Completed segments: {self.total_batchs - len(self.early_stopped_segments)}\n\n")
+            f.write(f"Total batchs: {self.total_batchs}\n")
+            f.write(f"Early stopped batchs: {len(self.early_stopped_batchs)} ({self.get_early_stopping_rate():.2%})\n")
+            f.write(f"Completed batchs: {self.total_batchs - len(self.early_stopped_batchs)}\n\n")
             
-            f.write(f"Average iterations per segment: {self.get_average_iterations():.2f}\n")
+            f.write(f"Average iterations per batch: {self.get_average_iterations():.2f}\n")
             f.write(f"Average iterations (early stopped): {self.get_early_stopped_average_iterations():.2f}\n")
             f.write(f"Average iterations (completed): {self.get_completed_average_iterations():.2f}\n\n")
             
-            f.write("Detailed results per segment:\n")
+            f.write("Detailed results per batch:\n")
             f.write("-" * 30 + "\n")
-            for i, iterations in enumerate(self.segment_iterations):
-                status = "Early Stopped" if i in self.early_stopped_segments else "Completed"
-                f.write(f"Segment {i:3d}: {iterations:4d} iterations ({status})\n")
+            for i, iterations in enumerate(self.batch_iterations):
+                status = "Early Stopped" if i in self.early_stopped_batchs else "Completed"
+                f.write(f"batch {i:3d}: {iterations:4d} iterations ({status})\n")
             
-            f.write(f"\nEarly stopped segment indices: {self.early_stopped_segments}\n")
+            f.write(f"\nEarly stopped batch indices: {self.early_stopped_batchs}\n")
         
-        print(f"Early stopping statistics saved to: {stats_file}")
+        logger.info(f"Early stopping statistics saved to: {stats_file}")

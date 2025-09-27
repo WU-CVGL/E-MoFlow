@@ -2,6 +2,9 @@ import torch
 from typing import Tuple
 from torchcubicspline import natural_cubic_spline_coeffs, NaturalCubicSpline
 
+from src.utils.logger import get_logger
+logger = get_logger()
+
 def create_vel_cspline(velocity :torch.Tensor):
     t = velocity[:,0]
     x = velocity[:,1:4]
@@ -60,7 +63,7 @@ def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
     
     q_norm = torch.norm(q)
     if abs(q_norm - 1.0) > 1e-2:
-        print(f"The L2 norm of q is{q_norm}, not 1")
+        logger.debug(f"The L2 norm of q is{q_norm}, not 1")
     
     R = torch.tensor([
         [1 - 2*y*y - 2*z*z, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
@@ -69,10 +72,10 @@ def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
     ]).to(q.device)
     
     if torch.norm(torch.mm(R, R.t()) - torch.eye(3, device=q.device, dtype=q.dtype)) > 1e-2:
-        print("Warning: Rotation matrix orthogonality check failed")
+        logger.debug("Warning: Rotation matrix orthogonality check failed")
         
     if abs(torch.det(R) - 1.0) > 1e-2:
-        print("Warning: Rotation matrix determinant check failed")
+        logger.debug("Warning: Rotation matrix determinant check failed")
     return R
 
 def angular_velocity_to_euler_rates(omega: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
@@ -186,7 +189,6 @@ def pose_to_velocity(timestamp: float, pose: torch.Tensor, dataset_name: str=Non
         omega = omega_mocap
         
     else:
-        # print("Warning: No Coordinates Transform Found")
         v = v_body
         omega = omega_body
         

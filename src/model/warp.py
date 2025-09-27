@@ -130,7 +130,7 @@ class NeuralODEWarp:
         # Integration loop
         for _ in range(self.num_step):
             warped_batch_txy = step_function(warped_batch_txy, t_step)
-        # print(f"After warp: {warped_batch_txy[0,10000]}")
+            
         return warped_batch_txy
 
 class ODEFunc(nn.Module):

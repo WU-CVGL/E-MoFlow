@@ -200,7 +200,6 @@ class MVSECDataLoader(DataLoaderBase):
             first_valid_gt_frame = 30
             last_valid_gt_frame = 5020
             
-        # print(np.array_equal(self.gt_timestamps, self.gt_motion_timestamps))
         self.gt_timestamps = self.gt_timestamps[first_valid_gt_frame:last_valid_gt_frame]
         self.U_gt_all = self.U_gt_all[first_valid_gt_frame:last_valid_gt_frame]
         self.V_gt_all = self.V_gt_all[first_valid_gt_frame:last_valid_gt_frame]
