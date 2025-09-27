@@ -552,6 +552,9 @@ if __name__ == "__main__":
         all_eval_lin_vel[i] = eval_motion["linear_velocity"]
         all_eval_ang_vel[i] = eval_motion["angular_velocity"]
     
+    logger.info("Finish all batches, Start summarizing the results...")
+    
+    # save metrics and visualize qualitative results
     error_dict = {
         "EPE": np.mean(epe), 
         "AE": np.mean(ae), 
@@ -561,26 +564,12 @@ if __name__ == "__main__":
         "ERROR_linear": np.mean(e_lin),
         "ERROR_angular": np.mean(e_ang)
     }
-    early_stopping_stats.save_to_file(config["logger"]["results_dir"])
     misc.save_metric_as_text(error_dict, config["logger"]["results_dir"])
     visualize_whole_motion(config, all_eval_lin_vel, all_eval_ang_vel, gt_lin_vel_tensor, gt_ang_vel_tensor)
     
-    time_stats = tools.time_analyzer.get_statistics()
-    total_train_time = time_stats["total_train_time"]
-    avg_train_time = time_stats["avg_train_time"]
-    total_valid_time = time_stats["total_valid_time"]
-    avg_valid_time = time_stats["avg_valid_time"]
-    # logger.info(f"Total Training Time (min): {total_train_time}")
-    # logger.info(f"Average Training Time (min): {avg_train_time}")
-    # logger.info(f"Total Validation Time (min): {total_valid_time}")
-    # logger.info(f"Average Validation Time (min): {avg_valid_time}")
-    
+    # save time statistics
+    early_stopping_stats.save_to_file(config["logger"]["results_dir"])
+    time_stats = tools.time_analyzer.get_statistics()    
     misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])
     
-    # Save model
-    # log_model_path = config["logger"]["model_weight_path"]
-    # dir_name = os.path.dirname(log_model_path) 
-    # os.makedirs(dir_name, exist_ok=True)
-    # torch.save(trained_flow_field.state_dict(), log_model_path)
-    
-    # tools.wandb_logger.finish()
+    logger.info("The experiment is done.")
