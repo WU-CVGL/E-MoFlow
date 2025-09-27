@@ -1,6 +1,8 @@
 __pycache__
 wandb
 main.log
-neuef_task.yaml
+gpu_resource.yaml
 outputs
 weights
+gpu_hold.py
+logs
