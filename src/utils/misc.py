@@ -203,12 +203,7 @@ def plot_velocity(lin_vel_array, ang_vel_array, save_dir, prefix_filename):
     _plot_single(lin_vel_array, "linear")
     _plot_single(ang_vel_array, "angular")
     
-def visualize_velocities(
-    config,
-    gt_lin_vel, gt_ang_vel,
-    eval_lin_vel, eval_ang_vel,
-    t_eval
-):
+def visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval):
     # tensor2array
     def to_numpy(tensor):
         return tensor.cpu().numpy() if isinstance(tensor, torch.Tensor) else tensor
