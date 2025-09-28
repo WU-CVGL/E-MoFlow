@@ -39,6 +39,7 @@ logger = get_logger()
 
 torch.set_float32_matmul_precision('high')
 
+
 @dataclass
 class Tools:
     viz: Visualizer
@@ -48,63 +49,64 @@ class Tools:
     early_stopping_stats: EarlyStoppingStats
     
     
-def split_events(config: Dict, dataset: MVSECDataLoader, viz: Visualizer):
+def split_events(config: Dict, dataset: MVSECDataLoader, tools: Tools):
     data_config = config["data"]
     eval_dt = data_config["eval_dt"]
     n_events = data_config["n_events_per_batch"]
+    gt_flow_save_dir = os.path.join(config["logger"]["results_dir"], "gt_flow")
+    origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
+    
+    # Data storage
+    total_batch_events = []
+    total_batch_events_for_train = []
+    total_batch_gt_flow = []
+    
+    # Get timestamps of frames
     eval_frame_timestamp_list = dataset.eval_frame_time_list() 
     if data_config["sequence"] in ["outdoor_day1", "outdoor_day2"]:
         eval_frame_timestamp_list = eval_frame_timestamp_list[
             data_config["valid_frame_1"] : data_config["valid_frame_2"]
         ]
-    if misc.check_key_and_bool(data_config, "remove_car"):
-        logger.info("Remove car-boody pixels")
     
-    total_batch_events = []
-    total_batch_events_for_train = []
-    total_batch_gt_flow = []
-    gt_flow_save_dir = os.path.join(config["logger"]["results_dir"], "gt_flow")
-    origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
-    txt_save_dir = os.path.join(config["logger"]["results_dir"], "output.txt")
-    
-    for i1 in tqdm(
-        range(len(eval_frame_timestamp_list) - eval_dt), 
-        desc=f"Divide the event stream into {eval_dt}-frame intervals", leave=True
-    ):      
+    # Split the event stream into several batches
+    logger.debug(f"Divide the event stream into {eval_dt}-frame intervals...")
+    for i1 in tqdm(range(len(eval_frame_timestamp_list) - eval_dt)):      
         t1 = eval_frame_timestamp_list[i1]
         t2 = eval_frame_timestamp_list[i1 + eval_dt]
     
+        # load ground truth flow
+        gt_flow = dataset.load_optical_flow(t1, t2)
+        
+        # load original events
         ind1, ind2 = dataset.time_to_index(t1), dataset.time_to_index(t2)
         batch_events = dataset.load_event(ind1, ind2)
         batch_events[..., 2] -= dataset.min_ts
-        gt_flow = dataset.load_optical_flow(t1, t2)
+        
+        # load events for training
         if ind2 - ind1 < n_events:
             insufficient = n_events - (ind2 - ind1)
             ind1 -= insufficient // 2
             ind2 += insufficient // 2
         elif ind2 - ind1 > n_events:
             ind1 = ind2 - n_events
-        
         batch_events_for_train = dataset.load_event(max(ind1, 0), min(ind2, len(dataset)))
         batch_events_for_train[..., 2] -= dataset.min_ts
+        
+        # remove events on car-body pixels
         if misc.check_key_and_bool(data_config, "remove_car"):
             batch_events_for_train = event_proc.crop_event(batch_events_for_train, 0, 193, 0, 346)
             batch_events = event_proc.crop_event(batch_events, 0, 193, 0, 346)
-            
+        
+        # visualize original event images
         batch_events_tensor = torch.tensor(batch_events, dtype=torch.float32).to(device)
-        batch_events_iwe = viz.create_clipped_iwe_for_visualization(batch_events_tensor)
-        viz.update_save_dir(origin_iwe_save_dir)
-        viz.visualize_image(batch_events_iwe.squeeze(0), file_prefix="origin_iwe_")
+        batch_events_iwe = tools.viz.create_clipped_iwe_for_visualization(batch_events_tensor)
+        tools.viz.update_save_dir(origin_iwe_save_dir)
+        tools.viz.visualize_image(batch_events_iwe.squeeze(0), file_prefix="origin_iwe_")
+        
+        # visualize ground truth flow
         gt_flow = np.transpose(gt_flow, (2, 0, 1))  # [2, H, W]
-        viz.update_save_dir(gt_flow_save_dir)
-        viz.visualize_optical_flow(
-            gt_flow[0],
-            gt_flow[1],
-            visualize_color_wheel=True,
-            file_prefix="gt_flow_"
-        )
-        # fmt = ["%d", "%d", "%f", "%d"]
-        # np.savetxt(txt_save_dir, batch_events_for_train, fmt=fmt, delimiter=" ")
+        tools.viz.update_save_dir(gt_flow_save_dir)
+        tools.viz.visualize_optical_flow(gt_flow[0], gt_flow[1], visualize_color_wheel=True, file_prefix="gt_flow_")
         
         total_batch_events.append(batch_events)
         total_batch_events_for_train.append(batch_events_for_train)
@@ -128,11 +130,13 @@ def visualize_whole_motion(
     eval_ang_vel_tensor = all_eval_ang_vel_spline.evaluate(all_motion_eval_t)
     
     fig_lin, fig_ang = misc.visualize_velocities(
-        config,
-        gt_lin_vel[:, 1:], gt_ang_vel[:, 1:], 
-        eval_lin_vel_tensor, eval_ang_vel_tensor, 
+        gt_lin_vel[:, 1:], 
+        gt_ang_vel[:, 1:], 
+        eval_lin_vel_tensor, 
+        eval_ang_vel_tensor, 
         all_motion_eval_t
     )
+    
     motion_save_dir = os.path.join(config["logger"]["results_dir"], "motion")
     lin_vel_figure_save_path = os.path.join(motion_save_dir, f"linear_velocity_comparison_whole_seq.png")
     ang_vel_figure_save_path = os.path.join(motion_save_dir, f"angular_velocity_comparison_whole_seq.png")
@@ -143,13 +147,14 @@ def visualize_whole_motion(
 
 
 def run_valid_phase(
-    config: Dict, batch_index: int, batch_events: torch.Tensor,
-    gt_flow: torch.Tensor, gt_motion: Dict,
+    config: Dict, tools: Tools, device: torch.device,
+    batch_index: int, 
+    batch_events: torch.Tensor, 
+    gt_flow: torch.Tensor, 
+    gt_motion: Dict,
     warpper: NeuralODEWarpV2,
     motion_spline: CubicBsplineVelocityModel,
-    flow_calculator: DenseFlowExtractor,
-    tools: Tools,
-    device: torch.device
+    flow_calculator: DenseFlowExtractor
 ):
     pred_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "pred_iwe")
     pred_flow_save_dir = os.path.join(config["logger"]["results_dir"], "pred_flow")
@@ -224,27 +229,29 @@ def run_valid_phase(
     
     
 def run_train_phase(
-    config: Dict,
+    config: Dict, tools: Tools, device: torch.device,
+    pixel_coords: torch.Tensor, 
     batch_events_for_train: torch.Tensor,
-    criterion: Dict,
-    tools: Tools,
-    device: torch.device
+    warpper: NeuralODEWarpV2,
+    motion_spline: CubicBsplineVelocityModel,
+    criterions: Dict,
 ):  
-    model_config = config["model"]
-    warp_config = config["warp"]
+    # config for training
     loss_config = config["loss"]
     optimizer_config = config["optimizer"]
     early_stopping_config = config.get("early_stopping", {})
     use_early_stopping = early_stopping_config.get("enabled", False)
     
-    # reset model
-    flow_field = EventFlowINR(model_config).to(device)
-    warpper = NeuralODEWarpV2(flow_field, device, warp_config)
-    motion_spline = CubicBsplineVelocityModel().to(device)
+    # learning rate scheduler
+    num_iters = optimizer_config["num_iters"]
     nn_optimizer = optim.Adam(warpper.flow_field.parameters())
     spline_optimizer = optim.Adam(motion_spline.parameters(), lr=optimizer_config["spline_lr"])
-    
-    use_early_stopping = early_stopping_config["enabled"]
+    nn_scheduler = create_exponential_scheduler(
+        optimizer=nn_optimizer,
+        lr1=optimizer_config["nn_initial_lr"],
+        lr2=optimizer_config["nn_final_lr"],
+        total_steps=num_iters
+    )
     if use_early_stopping:
         early_stopping = EarlyStopping(
             burn_in_steps=early_stopping_config.get("burn_in_steps", 100),
@@ -254,21 +261,13 @@ def run_train_phase(
             percentage=False
         )
     
-    # learning rate scheduler
-    num_iters = optimizer_config["num_iters"]
-    nn_scheduler = create_exponential_scheduler(
-        optimizer=nn_optimizer,
-        lr1=optimizer_config["nn_initial_lr"],
-        lr2=optimizer_config["nn_final_lr"],
-        total_steps=num_iters
-    )
-    
     # sample reference time
     batch_t_min, batch_t_max = torch.min(batch_events_for_train[:, 2]), torch.max(batch_events_for_train[:, 2])
     batch_t_ref = torch.linspace(batch_t_min, batch_t_max, int(num_iters/10)).to(device)
     indices = torch.arange(int(num_iters/10)).repeat_interleave(10)
     shuffled_indices = indices[torch.randperm(num_iters)]
-
+    
+    # training loop
     iter = 0
     early_stopped = False
     actual_iterations = 0
@@ -282,7 +281,6 @@ def run_train_phase(
         events_train = batch_events_for_train.clone() # (y, x, t, p)
         events_txy = events_train[..., [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
         t_ref = batch_t_ref[idx]
-        # t_ref = warpper.get_reference_time(batch_events_txy, warp_config["tref_setting"])
         warped_events_txy = warpper.warp_events(events_txy, t_ref).unsqueeze(0)
 
         # create image warped event    
@@ -306,8 +304,8 @@ def run_train_phase(
         # CMax loss
         if misc.check_key_and_bool(loss_config, "cmax"):
             if num_iwe == 1:
-                var_loss = criterion["var_criterion"](iwes)
-                grad_loss = criterion["grad_criterion"](iwes)
+                var_loss = criterions["var_criterion"](iwes)
+                grad_loss = criterions["grad_criterion"](iwes)
             elif num_iwe > 1:
                 raise ValueError("Multiple iwes are not supported")
         
@@ -317,7 +315,7 @@ def run_train_phase(
             events_mask = tools.imager.create_eventmask(warped_events)
             events_mask = events_mask[0].squeeze(0).to(device)
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
-                coord_tensor=image_coords,
+                coord_tensor=pixel_coords,
                 mask=events_mask,
                 n=10000
             )
@@ -334,9 +332,8 @@ def run_train_phase(
             t_min, t_max = torch.min(events_txy[..., 0]), torch.max(events_txy[..., 0])
             interp_t = (t_ref - t_min) / (t_max - t_min)
             lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
-            ssl_dec_error, ssl_average_dec_loss = criterion["dec_criterion"](
-                sample_norm_coords, sample_norm_flow, 
-                lin_vel, ang_vel
+            ssl_dec_error, ssl_average_dec_loss = criterions["dec_criterion"](
+                sample_norm_coords, sample_norm_flow, lin_vel, ang_vel
             )
         
         # sl DEC loss
@@ -345,7 +342,7 @@ def run_train_phase(
             events_mask = tools.imager.create_eventmask(warped_events)
             events_mask = events_mask[0].squeeze(0).to(device)
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
-                coord_tensor=image_coords,
+                coord_tensor=pixel_coords,
                 mask=events_mask,
                 n=1000
             )
@@ -360,9 +357,8 @@ def run_train_phase(
             
             v_gt, w_gt = gt_lin_vel_spline.evaluate(t_ref), gt_ang_vel_spline.evaluate(t_ref)
             v_gt, w_gt = v_gt.to(torch.float32).unsqueeze(0), w_gt.to(torch.float32).unsqueeze(0)
-            sl_dec_error, sl_average_dec_loss = criterion["dec_criterion"](
-                sample_norm_coords, sample_norm_flow, 
-                v_gt, w_gt
+            sl_dec_error, sl_average_dec_loss = criterions["dec_criterion"](
+                sample_norm_coords, sample_norm_flow, v_gt, w_gt
             )
                 
         # Total loss
@@ -398,8 +394,7 @@ def run_train_phase(
                 early_stopped = True
                 break
                 
-    early_stopping_stats.add_batch_result(i, actual_iterations, early_stopped)
-    
+    tools.early_stopping_stats.add_batch_result(i, actual_iterations, early_stopped)
     tools.time_analyzer.end_epoch()
     
     del nn_optimizer, spline_optimizer, nn_scheduler
@@ -415,6 +410,7 @@ if __name__ == "__main__":
     args = load_config.parse_args()
     config = load_config.load_yaml_config(args.config)
     data_config = config["data"]
+    model_config = config["model"]
     warp_config = config["warp"]
     
     # detect cuda
@@ -428,13 +424,15 @@ if __name__ == "__main__":
     dataloader_config = data_config.pop('loader')
     dataset = MVSECDataLoader(config=data_config)
     dataset.set_sequence(data_config["sequence"])
-    image_size = (data_config["hight"], data_config["width"])
+    image_size = (dataset._HEIGHT, dataset._WIDTH)
 
     # Generate coordinates on image plane
     intrinsic_mat = torch.from_numpy(dataset.intrinsic).clone()
     if misc.check_key_and_bool(data_config, "remove_car"):
+        logger.info("Remove car-boody pixels")
         logger.info("Correct intrinsic matrix")
         intrinsic_mat[1, 2] -= 0.5 * (260 - 193)
+    
     pixel2cam_converter = Pixel2Cam(
         dataset._HEIGHT, dataset._WIDTH, 
         intrinsic_mat,
@@ -443,18 +441,38 @@ if __name__ == "__main__":
     image_coords = pixel2cam_converter.generate_image_coordinate()
     
     # Event2img converter
-    imager = EventImager(image_size)
+    event_imager = EventImager(image_size)
 
     # Visualizer for event image
     viz = Visualizer(
-        image_shape=image_size,
-        show=False,
-        save=True,
-        save_dir=config["logger"]["results_dir"],
+        image_shape=image_size, show=False, save=True, save_dir=config["logger"]["results_dir"],
+    )
+
+    # Time analysis
+    time_analyzer = TimeAnalyzer()
+    
+    # Stats of early stopping
+    early_stopping_stats = EarlyStoppingStats(
+        batch_iterations=[],
+        early_stopped_batchs=[],
+        total_batchs=0
+    )
+    
+    # Wandb
+    # wandb_logger = WandbLogger(config)
+    
+    # Create tools
+    tools = Tools(
+        viz=viz,
+        imager=event_imager,
+        # wandb_logger=wandb_logger,
+        time_analyzer=time_analyzer,
+        early_stopping_stats=early_stopping_stats
     )
     
     # Get and split events
-    total_batch_events, total_batch_events_for_train, total_batch_gt_flow = split_events(config=config, dataset=dataset, viz=viz)
+    total_batch_events, total_batch_events_for_train, total_batch_gt_flow = split_events(config=config, dataset=dataset, tools=tools)
+    tools.early_stopping_stats.total_batchs = len(total_batch_events)
     
     # Get gt motion spline
     gt_lin_vel_array, gt_ang_vel_array = dataset.load_gt_motion()
@@ -489,28 +507,6 @@ if __name__ == "__main__":
     # Create off-line solver for continuous flow 
     flow_calculator = DenseFlowExtractor(grid_size=image_size, device=device, warp_config=warp_config)
     
-    # Wandb
-    # wandb_logger = WandbLogger(config)
-
-    # Time analysis
-    time_analyzer = TimeAnalyzer()
-    
-    # Stats of early stopping
-    early_stopping_stats = EarlyStoppingStats(
-        batch_iterations=[],
-        early_stopped_batchs=[],
-        total_batchs=len(total_batch_events)
-    )
-    
-    # Create tools
-    tools = Tools(
-        viz=viz,
-        imager=imager,
-        # wandb_logger=wandb_logger,
-        time_analyzer=time_analyzer,
-        early_stopping_stats=early_stopping_stats
-    )
-    
     # metric storage
     epe, ae, out = [], [], []
     rmse_lin, rmse_ang, e_lin, e_ang = [], [], [], []
@@ -519,25 +515,42 @@ if __name__ == "__main__":
     
     # Train and validation per batch
     for i in tqdm(range(len(total_batch_events))):
+        # prepare data
         batch_events = torch.tensor(total_batch_events[i], dtype=torch.float32).to(device)
         batch_events_for_train = torch.tensor(total_batch_events_for_train[i], dtype=torch.float32).to(device)
         batch_gt_flow = torch.tensor(total_batch_gt_flow[i], dtype=torch.float32).to(device)
         
+        # reset model
+        flow_field = EventFlowINR(model_config).to(device)
+        warpper = NeuralODEWarpV2(flow_field, device, warp_config)
+        motion_spline = CubicBsplineVelocityModel().to(device)
+        
         # train 
-        logger.info(f" Training on batch {i}...")
+        logger.info(f"Training on batch {i}...")
         warpper, motion_spline = run_train_phase(
-            config, batch_events_for_train, criterions, tools, device
+            config, tools, device,
+            pixel_coords=image_coords, 
+            batch_events_for_train=batch_events_for_train, 
+            warpper=warpper, 
+            motion_spline=motion_spline, 
+            criterions=criterions
         )
         
         # evaluation
-        logger.info(f" Evaluation on batch {i}...")
+        logger.info(f"Evaluation on batch {i}...")
         flow_metric, motion_metric, eval_motion = run_valid_phase(
-            config, i, batch_events, batch_gt_flow, gt_motion, 
-            warpper, motion_spline, flow_calculator, tools, device
+            config, tools, device, 
+            batch_index=i, 
+            batch_events=batch_events, 
+            gt_flow=batch_gt_flow, 
+            gt_motion=gt_motion, 
+            warpper=warpper, 
+            motion_spline=motion_spline, 
+            flow_calculator=flow_calculator
         )
         
         # delete last model to release GPU memory
-        del warpper.flow_field, motion_spline
+        del warpper, motion_spline
         torch.cuda.empty_cache()
 
         # store metrics
@@ -568,7 +581,7 @@ if __name__ == "__main__":
     visualize_whole_motion(config, all_eval_lin_vel, all_eval_ang_vel, gt_lin_vel_tensor, gt_ang_vel_tensor)
     
     # save time statistics
-    early_stopping_stats.save_to_file(config["logger"]["results_dir"])
+    tools.early_stopping_stats.save_to_file(config["logger"]["results_dir"])
     time_stats = tools.time_analyzer.get_statistics()    
     misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])
     
