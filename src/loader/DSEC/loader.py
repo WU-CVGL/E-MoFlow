@@ -193,7 +193,7 @@ class DSECSequence(Dataset):
         
         # sample events if too many
         n_events = events.shape[0]   
-        max_limit_events = 350000
+        max_limit_events = 300000
         if n_events >= max_limit_events:
             events = self.adaptive_spatiotemporal_sampling(events, max_limit_events)
             
