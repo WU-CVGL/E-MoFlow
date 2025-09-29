@@ -12,7 +12,7 @@ data:
     pin_memory: True
 
 logger:
-  project: dsec_350k_events_10000_iter_lr_decay_spline_ode_10
+  project: dsec_no_es_test_before_release
   expname: thun_01_a
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
@@ -38,3 +38,10 @@ warp:
   step_size: 10
   rtol: 1.0e-7
   atol: 1.0e-9
+
+early_stopping:
+  enabled: False
+  burn_in_steps: 300     
+  patience: 45          
+  min_delta: 1.0e-3       
+  percentage: false  
