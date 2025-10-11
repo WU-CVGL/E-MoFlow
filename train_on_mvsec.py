@@ -215,7 +215,7 @@ def run_valid_phase(
         eval_motion = {"linear_velocity": eval_t_lin_vel, "angular_velocity": eval_t_ang_vel}
         
         # plot velocity        
-        fig_lin, fig_ang = misc.visualize_velocities(config, gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
+        fig_lin, fig_ang = misc.visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval)
         lin_vel_figure_save_path = os.path.join(motion_save_dir, f"linear_velocity_comparison_{str(batch_index)}.png")
         ang_vel_figure_save_path = os.path.join(motion_save_dir, f"angular_velocity_comparison_{str(batch_index)}.png")
         fig_lin.savefig(lin_vel_figure_save_path, dpi=300, bbox_inches="tight")
@@ -230,7 +230,8 @@ def run_valid_phase(
     
 def run_train_phase(
     config: Dict, tools: Tools, device: torch.device,
-    pixel_coords: torch.Tensor, 
+    pixel_coords: torch.Tensor,
+    batch_idx: int, 
     batch_events_for_train: torch.Tensor,
     warpper: NeuralODEWarpV2,
     motion_spline: CubicBsplineVelocityModel,
@@ -268,7 +269,6 @@ def run_train_phase(
     shuffled_indices = indices[torch.randperm(num_iters)]
     
     # training loop
-    iter = 0
     early_stopped = False
     actual_iterations = 0
     tools.time_analyzer.start_epoch()
@@ -382,19 +382,18 @@ def run_train_phase(
         nn_scheduler.step()
         if misc.check_key_and_bool(loss_config, "ssl_dec"):
             spline_optimizer.step()
-        iter+=1  
         actual_iterations = j + 1
         
         if use_early_stopping:
             current_loss = total_loss.item()
             if early_stopping.step(current_loss):
-                logger.info(f"Early stopping triggered at iteration {j} for batch {i}")
+                logger.info(f"Early stopping triggered at iteration {j} for batch {batch_idx}")
                 logger.info(f"Best training loss: {early_stopping.best:.6f}")
                 logger.info(f"Current loss: {current_loss:.6f}")
                 early_stopped = True
                 break
                 
-    tools.early_stopping_stats.add_batch_result(i, actual_iterations, early_stopped)
+    tools.early_stopping_stats.add_batch_result(batch_idx, actual_iterations, early_stopped)
     tools.time_analyzer.end_epoch()
     
     del nn_optimizer, spline_optimizer, nn_scheduler
@@ -495,7 +494,7 @@ if __name__ == "__main__":
     }
     
     # Instantiate criterion
-    dec_criterion = DifferentialEpipolarLoss()
+    dec_criterion = DifferentialEpipolarLoss(use_huber=False)
     var_criterion = FocusLoss(loss_type="variance", norm="l1")
     grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
     criterions = {
@@ -530,6 +529,7 @@ if __name__ == "__main__":
         warpper, motion_spline = run_train_phase(
             config, tools, device,
             pixel_coords=image_coords, 
+            batch_idx=i,
             batch_events_for_train=batch_events_for_train, 
             warpper=warpper, 
             motion_spline=motion_spline, 
