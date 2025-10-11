@@ -88,9 +88,9 @@ class DenseFlowExtractor:
         self.atol: float = warp_config["atol"]
         
     def integrate_flow(self, model, t_start, t_end):
-        t = torch.linspace(t_start, t_end, self.step_size).to(self.device)
+        t = torch.tensor([t_start, t_end], device=self.device)
         initial_positions = torch.stack((self.x, self.y), dim=1)
-        
+    
         odefunc = ForwardFlowODEFunc(model, self.device)
         solution = odeint(
             odefunc, initial_positions, t, 
