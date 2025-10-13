@@ -43,7 +43,7 @@ warp:
   atol: 1.0e-9
 
 early_stopping:
-  enabled: True
+  enabled: False
   burn_in_steps: 300     
   patience: 45          
   min_delta: 1.0e-3       
