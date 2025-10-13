@@ -1,5 +1,7 @@
 <h1 align="center"> 🥺 E-MoFlow: Learning Egomotion and Optical Flow from Event Data via Implicit Regularization  </h1>
 
+<div style="height:-20px;"></div>
+
 <div align="center"><h3>[NeurIPS 2025]</h3></div>
 <div align="center">
     <a href="https://akawincent.github.io/">Wenpu Li*</a>
@@ -14,7 +16,7 @@
     &nbsp;·&nbsp;
     <a href="https://ethliup.github.io/">Peidong Liu†</a>
 
-<a href="https://arxiv.org/abs/2505.21060">Paper</a>| 
+<!-- <a href="https://arxiv.org/abs/2505.21060">Paper</a>|  -->
 
 <h3 align="center"><a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
 
@@ -36,8 +38,8 @@
 ## 📢 News & 🚧 TODO
 - [ ] Add point tracking visualization results.
 - [ ] Use uv to manage project environments and dependencies.
-- [ ] Release the training code for DSEC dataset、
 - [ ] Publish the v1 paper on arXiv.
+- [ ] Release the training code for DSEC dataset、
 - `2025.10.13` Training code for MVSEC dataset has been released. 
 - `2025.10.12` Our project homepage is available online.
 - `2025.09.18` Our paper was accepted by NeurIPS2025!! Congratulates to all collaborators!!
