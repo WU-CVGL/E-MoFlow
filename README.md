@@ -14,8 +14,8 @@
     &nbsp;·&nbsp;
     <a href="https://ethliup.github.io/">Peidong Liu†</a>
 
-<h3 align="center"><a href="https://arxiv.org/abs/2505.21060">Paper</a> | <a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
-
+<!-- <h3 align="center"><a href="https://arxiv.org/abs/2505.21060">Paper</a> | <a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3> -->
+<a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
 ![teaser](assets/emoflow_teaser_bg.jpg)
 
 </div>
