@@ -342,9 +342,7 @@ def run_train_phase(
             events_mask = tools.imager.create_eventmask(warped_events)
             events_mask = events_mask[0].squeeze(0).to(device)
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
-                coord_tensor=pixel_coords,
-                mask=events_mask,
-                n=1000
+                coord_tensor=pixel_coords, mask=events_mask, n=50000
             )
             t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
             sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
@@ -494,7 +492,7 @@ if __name__ == "__main__":
     }
     
     # Instantiate criterion
-    dec_criterion = DifferentialEpipolarLoss(use_huber=False)
+    dec_criterion = DifferentialEpipolarLoss()
     var_criterion = FocusLoss(loss_type="variance", norm="l1")
     grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
     criterions = {
