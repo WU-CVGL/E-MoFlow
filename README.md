@@ -14,17 +14,16 @@
     &nbsp;·&nbsp;
     <a href="https://ethliup.github.io/">Peidong Liu†</a>
 
-<!-- <h3 align="center"><a href="https://arxiv.org/abs/2505.21060">Paper</a> | <a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3> -->
-<a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
+<h3 align="center"><a href="https://arxiv.org/abs/2505.21060">Paper</a> | <a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
+
 
 ![teaser](assets/emoflow_teaser_bg.jpg)
-</div>
 
-<div align="center">
-    <video src="assets/indoor_flying_1_dt_4_web.mp4" width="400" autoplay loop muted></video>
-    <video src="assets/outdoor_day_1_dt_4_web.mp4" width="400" autoplay loop muted></video>
-</div>
-</div>
+<div style="height:10px;"></div>
+
+![image](assets/indoor_flying_1_dt_4_web.gif)
+![image](assets/outdoor_day_1_dt_4_web.gif)
+
 
 </br>
 
