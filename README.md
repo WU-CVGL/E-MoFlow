@@ -20,10 +20,10 @@
 
 
 <div style="width:80%;margin:auto;">
-    <img src="assets/emoflow_teaser_bg.jpg" style="width:100%;" />
+    <img src="assets/emoflow_teaser_bg.jpg" style="width:80%;" />
     <div style="height:40px;"></div>
-    <img src="assets/indoor_flying_1_dt_4_web.gif" style="width:100%;" />
-    <img src="assets/outdoor_day_1_dt_4_web.gif" style="width:100%;" />
+    <img src="assets/indoor_flying_1_dt_4_web.gif" style="width:80%;" />
+    <img src="assets/outdoor_day_1_dt_4_web.gif" style="width:80%;" />
 </div>
 
 </div>
