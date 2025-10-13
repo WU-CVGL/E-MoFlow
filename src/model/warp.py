@@ -240,7 +240,7 @@ class NeuralODEWarpV2(nn.Module):
     def warp_events(self, batch_txy: torch.Tensor, t_ref: torch.Tensor):
         augmented_init = self._build_augmented_state(batch_txy, t_ref)
         t_eval = torch.tensor([0.0, 1.0], device=self.device)
-        step_size = (t_eval[1] - t_eval[0]) / self.step_size
+        # step_size = (t_eval[1] - t_eval[0]) / self.step_size
         solution = odeint(
             self.ode_func,
             augmented_init,
@@ -249,7 +249,7 @@ class NeuralODEWarpV2(nn.Module):
             atol=self.atol,
             method=self.solver,
             # options={
-            #     "step_size": step_size
+            #     "step_size": self.step_size
             # },
         )
         
