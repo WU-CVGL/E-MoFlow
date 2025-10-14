@@ -45,15 +45,14 @@
 - `2025.09.18` Our paper was accepted by NeurIPS2025!! Congratulates to all collaborators!!
 
 ## ⚙️ Installation
-
-
+Working in progress...
 
 ## 📊 Data Preparation
 We conducted experiments on the [MVSEC](https://daniilidis-group.github.io/mvsec/) dataset and [DSEC](https://dsec.ifi.uzh.ch/) dataset. After downloading the datasets, for MVSEC, you only need to modify the `data_path` and `gt_path` in the config file to your paths. For DSEC, you only need to modify the `data_path` and `timestamp_path` in the config file to your paths.
 
 The download link is as follows:
-- MVSEC: [[hdf5](https://drive.google.com/drive/folders/1rwyRk26wtWeRgrAx_fgPc-ubUzTFThkV)]; [[gt flow](https://drive.google.com/drive/folders/1XS0AQTuCwUaWOmtjyJWRHkbXjj_igJLp)]
-- DSEC: [[hdf5](https://download.ifi.uzh.ch/rpg/DSEC/test_coarse/test_events.zip)]; [[timestamps](https://download.ifi.uzh.ch/rpg/DSEC/test_forward_optical_flow_timestamps.zip)]
+- MVSEC: [[hdf5](https://drive.google.com/drive/folders/1rwyRk26wtWeRgrAx_fgPc-ubUzTFThkV)] [[gt flow](https://drive.google.com/drive/folders/1XS0AQTuCwUaWOmtjyJWRHkbXjj_igJLp)]
+- DSEC: [[hdf5](https://download.ifi.uzh.ch/rpg/DSEC/test_coarse/test_events.zip)] [[timestamps](https://download.ifi.uzh.ch/rpg/DSEC/test_forward_optical_flow_timestamps.zip)]
 
 ## 🚀 Run
 You can run E-MoFlow on the MVSEC dataset and DSEC dataset by:
@@ -66,13 +65,17 @@ Additionally, you can modify the config file to conduct ablation studies or enab
 After running, the following results will be output:
 ```
 outputs/
-├── project_name/
+├── project/
 │   ├── expname/
-|   |   |-- origin_iwe  # original IWE
-|   |   |-- pred_iwe    # warped IWE using predicted optical flow
-|   |   |-- pred_flow   # predicted optical flow
-|   |   |-- gt_flow     # ground truth optical flow (only for MVSEC)
-|   |   |-- motion      # estimated egomotion (only for MVSEC)
+|   |   |-- origin_iwe                  # Original IWE
+|   |   |-- pred_iwe                    # Warped IWE using predicted optical flow
+|   |   |-- pred_flow                   # Predicted optical flow
+|   |   |-- submission_pred_flow        # Predicted optical flow for DSEC evaluation (only for DSEC)
+|   |   |-- gt_flow                     # Ground truth optical flow (only for MVSEC)
+|   |   |-- motion                      # Estimated egomotion (only for MVSEC)
+|   |   |-- metric.txt                  # Quantitative results (only for MVSEC)
+|   |   |-- time_stats.txt              # Runing time statistics
+|   |   |-- early_stopping_stats.txt    # Early stopping statistics (only for early stopping experiments)
 ```
 
 ## 📖 Citation
