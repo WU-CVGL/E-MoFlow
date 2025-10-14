@@ -1,6 +1,31 @@
 import math
 from torch.optim.lr_scheduler import LambdaLR
 
+def create_warmup_cosine_scheduler(optimizer, lr_max, lr_min, total_steps, warmup_steps, lr_warmup_start=1e-7):
+    assert lr_max > lr_min > 0, "lr_max must be greater than lr_min and both must be positive."
+    assert total_steps > warmup_steps >= 0, "total_steps must be greater than warmup_steps, and warmup_steps must be non-negative."
+    assert lr_warmup_start < lr_max, "lr_warmup_start must be less than lr_max."
+    
+    cos_steps = total_steps - warmup_steps
+
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            # 线性增加
+            lr_range = lr_max - lr_warmup_start
+            current_lr = lr_warmup_start + lr_range * (current_step / warmup_steps)
+            return current_lr / lr_max
+        
+        t = current_step - warmup_steps
+        if t >= cos_steps:
+            return lr_min / lr_max
+        
+        cosine_decay = 0.5 * (1 + math.cos(math.pi * t / cos_steps))
+        current_lr = lr_min + (lr_max - lr_min) * cosine_decay
+        return current_lr / lr_max
+    
+    optimizer.param_groups[0]['lr'] = lr_max
+    return LambdaLR(optimizer, lr_lambda)
+
 def create_expcos_scheduler(optimizer, lr_start, lr_end_exp, lr_end_cos, exp_steps, cos_steps):
     assert exp_steps > 0, "exp_steps must be greater than 0"
     assert cos_steps > 0, "cos_steps must be greater than 0"
