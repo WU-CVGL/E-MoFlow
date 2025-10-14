@@ -24,7 +24,7 @@ from src.model.warp import NeuralODEWarpV2
 from src.model.eventflow import EventFlowINR, DenseFlowExtractor
 from src.model.geometric import Pixel2Cam, CubicBsplineVelocityModel
 from src.model.early_stopping import EarlyStopping, EarlyStoppingMode, EarlyStoppingStats
-from src.model.scheduler import create_exponential_scheduler
+from src.model.scheduler import create_warmup_cosine_scheduler
 
 from src.utils.wandb import WandbLogger
 from src.utils.timer import TimeAnalyzer
@@ -44,6 +44,15 @@ class Tools:
     # wandb_logger: WandbLogger
     time_analyzer: TimeAnalyzer
     early_stopping_stats: EarlyStoppingStats
+
+def save_original_iwes(config: Dict, dataset: DSECSequence, loader: DataLoader, tools: Tools, device: torch.device):
+    origin_iwe_save_dir = os.path.join(config["logger"]["results_dir"], "origin_iwe")
+    for i, sample in enumerate(tqdm(loader, desc=f"Create Original IWE of {dataset.name}...", leave=False)):
+        batch_events = sample['events'][0].to(device)
+        batch_events_iwe = tools.viz.create_clipped_iwe_for_visualization(batch_events)
+        tools.viz.update_save_dir(origin_iwe_save_dir)
+        tools.viz.visualize_image(batch_events_iwe.squeeze(0), file_prefix="origin_iwe_")
+
 
 def run_valid_phase(
     config: Dict, tools: Tools, device: torch.device,
@@ -110,13 +119,14 @@ def run_train_phase(
     
     # learning rate scheduler
     num_iters = optimizer_config["num_iters"]
-    nn_optimizer = optim.Adam(warpper.flow_field.parameters())
-    spline_optimizer = optim.Adam(motion_spline.parameters(), lr=optimizer_config["spline_lr"])
-    nn_scheduler = create_exponential_scheduler(
+    nn_optimizer = optim.AdamW(warpper.flow_field.parameters())
+    spline_optimizer = optim.AdamW(motion_spline.parameters(), lr=optimizer_config["spline_lr"])
+    nn_scheduler = create_warmup_cosine_scheduler(
         optimizer=nn_optimizer,
-        lr1=optimizer_config["nn_initial_lr"],
-        lr2=optimizer_config["nn_final_lr"],
-        total_steps=num_iters
+        lr_max=optimizer_config["nn_initial_lr"],
+        lr_min=optimizer_config["nn_final_lr"],
+        total_steps=num_iters,
+        warmup_steps=250
     )
     if use_early_stopping:
         early_stopping = EarlyStopping(
@@ -307,7 +317,11 @@ if __name__ == '__main__':
     
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
     tools.early_stopping_stats.total_batchs = len(loader)
-    for i, sample in enumerate(tqdm(loader, desc=f"Processing {dataset.name}", leave=False)):
+    
+    # save original iwes
+    save_original_iwes(config, dataset, loader, tools, device)
+    
+    for i, sample in enumerate(tqdm(loader, desc=f"Training on {dataset.name}...", leave=False)):
         # prepare data
         batch_events = sample['events'][0].to(device)
         batch_t_min, batch_t_max = torch.min(batch_events[:, 2]), torch.max(batch_events[:, 2])
@@ -344,6 +358,7 @@ if __name__ == '__main__':
         # delete last model to release GPU memory
         del warpper, motion_spline
         torch.cuda.empty_cache()
-    
+        
+    tools.early_stopping_stats.save_to_file(config["logger"]["results_dir"])
     time_stats = tools.time_analyzer.get_statistics()  
     misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])

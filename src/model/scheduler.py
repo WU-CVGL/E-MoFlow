@@ -1,6 +1,7 @@
 import math
 from torch.optim.lr_scheduler import LambdaLR
 
+
 def create_warmup_cosine_scheduler(optimizer, lr_max, lr_min, total_steps, warmup_steps, lr_warmup_start=1e-7):
     assert lr_max > lr_min > 0, "lr_max must be greater than lr_min and both must be positive."
     assert total_steps > warmup_steps >= 0, "total_steps must be greater than warmup_steps, and warmup_steps must be non-negative."
@@ -10,7 +11,6 @@ def create_warmup_cosine_scheduler(optimizer, lr_max, lr_min, total_steps, warmu
 
     def lr_lambda(current_step):
         if current_step < warmup_steps:
-            # 线性增加
             lr_range = lr_max - lr_warmup_start
             current_lr = lr_warmup_start + lr_range * (current_step / warmup_steps)
             return current_lr / lr_max
@@ -25,6 +25,7 @@ def create_warmup_cosine_scheduler(optimizer, lr_max, lr_min, total_steps, warmu
     
     optimizer.param_groups[0]['lr'] = lr_max
     return LambdaLR(optimizer, lr_lambda)
+
 
 def create_expcos_scheduler(optimizer, lr_start, lr_end_exp, lr_end_cos, exp_steps, cos_steps):
     assert exp_steps > 0, "exp_steps must be greater than 0"
@@ -50,6 +51,7 @@ def create_expcos_scheduler(optimizer, lr_start, lr_end_exp, lr_end_cos, exp_ste
     optimizer.param_groups[0]['lr'] = lr_start
     return LambdaLR(optimizer, lr_lambda)
 
+
 def create_cosexp_scheduler(optimizer, lr_start, lr_end_cos, lr_end_exp, cos_steps, exp_steps):
     assert cos_steps > 0 and exp_steps > 0, "cos_steps must be greater than 0"
     assert lr_start > lr_end_cos,  "Learning rates must satisfy lr_start > lr_end_cos > lr_end_exp"
@@ -73,6 +75,7 @@ def create_cosexp_scheduler(optimizer, lr_start, lr_end_cos, lr_end_exp, cos_ste
     optimizer.param_groups[0]['lr'] = lr_start
     return LambdaLR(optimizer, lr_lambda)
 
+
 def create_exponential_scheduler(optimizer, lr1, lr2, total_steps):
     assert lr1 > lr2 > 0, "Learning rates must satisfy lr_1 > lr_2 > 0"
     assert total_steps > 0, "total_steps must be greater than 0"
@@ -85,6 +88,7 @@ def create_exponential_scheduler(optimizer, lr1, lr2, total_steps):
 
     optimizer.param_groups[0]['lr'] = lr1
     return LambdaLR(optimizer, lr_lambda)
+
 
 def create_cosine_scheduler(optimizer, lr1, lr2, total_steps):
     assert lr1 > lr2 > 0, "lr1 must be greater than lr2 and both must be positive"
