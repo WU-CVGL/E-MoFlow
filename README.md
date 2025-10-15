@@ -16,9 +16,8 @@
     &nbsp;·&nbsp;
     <a href="https://ethliup.github.io/">Peidong Liu†</a>
 
-<!-- <a href="https://arxiv.org/abs/2505.21060">Paper</a>|  -->
 
-<h3 align="center"><a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
+<h3 align="center"> <a href="https://arxiv.org/abs/2510.12753">Paper</a> | <a href="https://akawincent.github.io/EMoFlow/">Project Page</a> </h3>
 
 
 <div style="width:80%;margin:auto;">
@@ -36,10 +35,12 @@
 
 
 ## 📢 News & 🚧 TODO
+- [ ] Launch the paper presentation video..
+- [ ] Publish the v2 paper on arXiv.
 - [ ] Add point tracking visualization results.
 - [ ] Use uv to manage project environments and dependencies.
-- [ ] Publish the v1 paper on arXiv.
-- [ ] Release the training code for DSEC dataset、
+- [ ] Release the training code for DSEC dataset
+- `2025.10.15` Publish the v1 paper on arXiv.
 - `2025.10.13` Training code for MVSEC dataset has been released. 
 - `2025.10.12` Our project homepage is available online.
 - `2025.09.18` Our paper was accepted by NeurIPS2025!! Congratulates to all collaborators!!
@@ -75,7 +76,7 @@ outputs/
 |   |   |-- motion                      # Estimated egomotion (only for MVSEC)
 |   |   |-- metric.txt                  # Quantitative results (only for MVSEC)
 |   |   |-- time_stats.txt              # Runing time statistics
-|   |   |-- early_stopping_stats.txt    # Early stopping statistics (only for early stopping experiments)
+|   |   |-- early_stopping_stats.txt    # Early stopping statistics
 ```
 
 ## 📖 Citation
