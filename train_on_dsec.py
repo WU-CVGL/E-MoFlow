@@ -119,8 +119,8 @@ def run_train_phase(
     
     # learning rate scheduler
     num_iters = optimizer_config["num_iters"]
-    nn_optimizer = optim.AdamW(warpper.flow_field.parameters())
-    spline_optimizer = optim.AdamW(motion_spline.parameters(), lr=optimizer_config["spline_lr"])
+    nn_optimizer = optim.AdamW(warpper.flow_field.parameters(), weight_decay=1.0e-7)
+    spline_optimizer = optim.AdamW(motion_spline.parameters(), lr=optimizer_config["spline_lr"], weight_decay=1.0e-7)
     nn_scheduler = create_warmup_cosine_scheduler(
         optimizer=nn_optimizer,
         lr_max=optimizer_config["nn_initial_lr"],
