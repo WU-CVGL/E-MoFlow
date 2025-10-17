@@ -9,7 +9,7 @@ from torchdiffeq import odeint
 from torchdiffeq import odeint_adjoint
 
 class EventFlowINR(nn.Module):
-    def __init__(self, config, D=8, W=256, input_ch=3, output_ch=2, skips=[4]):
+    def __init__(self, config, D=12, W=256, input_ch=3, output_ch=2, skips=[6]):
         super().__init__()
         self.config = config
         self.D = D
@@ -19,22 +19,22 @@ class EventFlowINR(nn.Module):
         self.skips = skips
         # self.leaky_relu = nn.LeakyReLU(negative_slope=0.01)
 
-        # network
+        # create positional encoding embedder
+        self.embed_fn, self.embed_ch = embedder.get_embedder(self.config)
+
+        # network (use embedded dimension instead of input_ch)
         self.coord_linears = nn.ModuleList(
-            [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in
+            [nn.Linear(self.embed_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + self.embed_ch, W) for i in
                                         range(D - 1)])
 
-        self.output_linear = nn.Linear(W+input_ch if self.skips[-1]==D-1 else W, output_ch)
+        self.output_linear = nn.Linear(W+self.embed_ch if self.skips[-1]==D-1 else W, output_ch)
         # self.output_linear = nn.Linear(W, output_ch)
 
     def forward(self, coord_txy: torch.Tensor):
-        # create positional encoding
-        embed_fn, input_ch = embedder.get_embedder(self.config)
-
-        # forward positional encoding
+        # apply positional encoding to input coordinates
         coord_xyt_flat = torch.reshape(coord_txy, [-1, coord_txy.shape[-1]])
-        embedded_coord_xyt = embed_fn(coord_xyt_flat)
-        
+        embedded_coord_xyt = self.embed_fn(coord_xyt_flat)
+
         h = embedded_coord_xyt
         layer_outputs = []
         for i, l in enumerate(self.coord_linears):
@@ -46,7 +46,7 @@ class EventFlowINR(nn.Module):
             layer_outputs.append(h)
             if i in self.skips:
                 h = torch.cat([embedded_coord_xyt, h], -1)
-       
+
         outputs = self.output_linear(h)
         outputs = torch.reshape(outputs, list(coord_txy.shape[:-1]) + [outputs.shape[-1]])
         return outputs
