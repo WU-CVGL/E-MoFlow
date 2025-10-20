@@ -60,27 +60,27 @@ class SparseFlowSmoothnessLoss(nn.Module):
 
     def forward(self, sample_coords, sample_flow, flow_field):
         B, N, _ = sample_coords.shape
+        device = sample_coords.device
 
         # Create small offsets for finite difference (in pixel space)
         delta = 1.0  # 1 pixel offset
-        offsets = torch.zeros(B, N, 2, 3, device=sample_coords.device, dtype=sample_coords.dtype)
-        offsets[:, :, 0, :] = sample_coords  # right offset base
-        offsets[:, :, 0, 1] += delta          # x + delta
-        offsets[:, :, 1, :] = sample_coords  # down offset base
-        offsets[:, :, 1, 2] += delta          # y + delta
 
-        # query neighbor flow: [B, N*2, 3] -> [B, N*2, 2]
-        neighbor_coords = offsets.reshape(B, N * 2, 3)
-        neighbor_flow = flow_field(neighbor_coords) 
-        flow_right = neighbor_flow[:, :N, :]
-        flow_down = neighbor_flow[:, N:, :]
+        # Compute neighboring coordinates: right (+x) and down (+y)
+        coords_right = sample_coords.clone()  # [1, N, 3]
+        coords_right[..., 1] += delta  # x + delta 
 
-        # Compute finite differences (delta=1.0)
-        # ∂f/∂x ≈ f(x+1) - f(x), ∂f/∂y ≈ f(y+1) - f(y)
-        grad_x = flow_right - sample_flow
-        grad_y = flow_down - sample_flow
+        coords_down = sample_coords.clone()  # [1, N, 3]
+        coords_down[..., 2] += delta  # y + delta 
+
+        # Query flow at neighboring points
+        flow_right = flow_field(coords_right)  # [1, N, 2]
+        flow_down = flow_field(coords_down)    # [1, N, 2]
+
+        # Compute finite differences: ∂f/∂x ≈ (f(x+Δx) - f(x)) / Δx
+        grad_x = (flow_right - sample_flow) / delta  # [1, N, 2]
+        grad_y = (flow_down - sample_flow) / delta   # [1, N, 2]
 
         # L1 norm of gradients: |∇_x V| + |∇_y V|
-        smoothness = torch.abs(grad_x) + torch.abs(grad_y)
+        smoothness = torch.abs(grad_x) + torch.abs(grad_y)  # [1, N, 2]
 
         return torch.mean(smoothness)
