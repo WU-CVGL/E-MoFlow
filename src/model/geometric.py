@@ -90,30 +90,33 @@ class Pixel2Cam:
     
     def sample_sparse_coordinates(
         self,
-        coord_tensor: torch.Tensor, 
-        mask: torch.Tensor, 
+        coord_tensor: torch.Tensor,
+        mask: torch.Tensor,
         n: int
     ) -> torch.Tensor:
         assert coord_tensor.dim() == 4 and coord_tensor.shape[0] == 1, "The coordinate tensor shape should be [1, H, W, 3]."
         H, W = coord_tensor.shape[1], coord_tensor.shape[2]
-        
-        if mask == None:
-            valid_coords = coord_tensor[0].view(-1, 3)
+        device = coord_tensor.device
+
+        if mask is None:
+            total_pixels = H * W
+            n_samples = min(n, total_pixels)
+            rand_idx = torch.randint(0, total_pixels, (n_samples,), device=device)
+            sampled_coords = coord_tensor[0].view(-1, 3)[rand_idx]
         else:
             assert mask.shape == (H, W), "The mask shape does not match the coordinate tensor."
-            valid_coords = coord_tensor[0][mask.bool()]  # [num_valid, 3]
-        num_valid = valid_coords.shape[0]
-        
-        if num_valid == 0:
-            return torch.zeros((1, 0, 3), device=coord_tensor.device)
-        
-        n_samples = min(n, num_valid)
-    
-        rand_idx = torch.randperm(num_valid, device=valid_coords.device)[:n_samples]
-        sampled_coords = valid_coords[rand_idx]  # [n_samples, 3]
-        
-        # [1, n_samples, 3]
-        return sampled_coords.unsqueeze(0)
+
+            valid_indices = mask.nonzero(as_tuple=False)  # [num_valid, 2] (y, x)
+            num_valid = valid_indices.shape[0]
+            if num_valid == 0:
+                return torch.zeros((1, 0, 3), device=device)
+
+            n_samples = min(n, num_valid)
+            rand_idx = torch.randint(0, num_valid, (n_samples,), device=device)
+            sampled_indices = valid_indices[rand_idx]  # [n_samples, 2]
+            sampled_coords = coord_tensor[0, sampled_indices[:, 0], sampled_indices[:, 1]]  # [n_samples, 3]
+
+        return sampled_coords.unsqueeze(0)  # [1, n_samples, 3]
 
 class CubicBsplineVelocityModel(nn.Module):
     def __init__(self):
