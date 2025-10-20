@@ -9,11 +9,11 @@ from torchdiffeq import odeint
 from torchdiffeq import odeint_adjoint
 
 class EventFlowINR(nn.Module):
-    def __init__(self, config, D=12, W=256, input_ch=3, output_ch=2, skips=[6]):
+    def __init__(self, config, D=8, W=256, input_ch=3, output_ch=2, skips=[4]):
         super().__init__()
         self.config = config
-        self.D = D
-        self.W = W
+        self.D = config['nn_depth']
+        self.W = config['nn_width']
         self.input_ch = input_ch
         self.output_ch = output_ch
         self.skips = skips
