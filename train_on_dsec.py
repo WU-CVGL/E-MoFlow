@@ -18,6 +18,7 @@ from src.utils import (
 from src.loader.DSEC.loader import DSECSequence, sequence_collate_fn
 
 from src.loss.focus import FocusLoss
+from src.loss.smooth import SparseFlowSmoothnessLoss
 from src.loss.dec import DifferentialEpipolarLoss
 
 from src.model.warp import NeuralODEWarpV2
@@ -66,37 +67,41 @@ def run_valid_phase(
     submission_flow_save_dir = os.path.join(config["logger"]["results_dir"], "submission_pred_flow")
         
     with torch.no_grad():
-        # warp events by trained flow
-        valid_events = batch_events.clone()
-        valid_events_txy = valid_events[:, [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
+        # warp events by trained flow (no clone needed in validation)
+        valid_events_txy = batch_events[:, [2, 1, 0]]  # (y,x,t,p) -> (t,x,y), single indexing
+        valid_polarity = batch_events[:, 3]  # Extract polarity once
+
         valid_ref = warpper.get_reference_time(valid_events_txy, "max")
         warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
-        
-        # create image warped event 
-        num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]       
-        valid_polarity = valid_events[:, 3].unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1).to(device)
-        warped_valid_events = torch.cat((warped_valid_events_txy[..., [2,1,0]], valid_polarity), dim=2).to(device)
-        
-        # save image warped event 
+
+        # create image warped event
+        num_iwe_valid, num_events_valid = warped_valid_events_txy.shape[0], warped_valid_events_txy.shape[1]
+        valid_polarity_expanded = valid_polarity.unsqueeze(0).expand(num_iwe_valid, num_events_valid).unsqueeze(-1)
+        warped_valid_events = torch.cat((warped_valid_events_txy[..., [2,1,0]], valid_polarity_expanded), dim=2)
+
+        # save image warped event
         valid_warped_iwe = tools.viz.create_clipped_iwe_for_visualization(warped_valid_events)
         tools.viz.update_save_dir(pred_iwe_save_dir)
         tools.viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_")
-        
-        # predict optical flow
+
+        # predict optical flow (reuse already extracted time values)
         t_start = torch.min(valid_events_txy[:, 0])
         t_end = torch.max(valid_events_txy[:, 0])
         tools.time_analyzer.start_valid()
         pred_flow = flow_calculator.integrate_flow(warpper.flow_field, t_start, t_end).unsqueeze(0) # [B,2,H,W]
         tools.time_analyzer.end_valid()
-        
+
+        # Convert to CPU/numpy once for all subsequent operations
+        pred_flow_cpu = pred_flow.squeeze(0).cpu()
+        batch_events_cpu = batch_events.cpu().numpy()
+
         # visualize optical flow
-        pred_flow = pred_flow.squeeze(0).cpu().numpy()
         tools.viz.update_save_dir(pred_flow_save_dir)
-        tools.viz.visualize_optical_flow_on_event_mask(pred_flow, valid_events.cpu().numpy(), file_prefix="pred_flow_masked_")
-        
-        # save 16-bit optical flow for dsec eval
+        tools.viz.visualize_optical_flow_on_event_mask(pred_flow_cpu.numpy(), batch_events_cpu, file_prefix="pred_flow_masked_")
+
+        # save 16-bit optical flow for dsec eval (reuse pred_flow_cpu to avoid re-conversion)
         tools.viz.update_save_dir(submission_flow_save_dir)
-        flow = flow_proc.scale_optical_flow(torch.from_numpy(pred_flow), 60).numpy()
+        flow = flow_proc.scale_optical_flow(pred_flow_cpu, 60).numpy()
         file_index = sample['file_index'].item()
         file_name = f'{str(file_index).zfill(6)}.png'
         flow_proc.save_flow(Path(submission_flow_save_dir) / file_name, flow)
@@ -119,8 +124,8 @@ def run_train_phase(
     
     # learning rate scheduler
     num_iters = optimizer_config["num_iters"]
-    nn_optimizer = optim.AdamW(warpper.flow_field.parameters(), weight_decay=1.0e-7)
-    spline_optimizer = optim.AdamW(motion_spline.parameters(), lr=optimizer_config["spline_lr"], weight_decay=1.0e-7)
+    nn_optimizer = optim.AdamW(warpper.flow_field.parameters(), weight_decay=1.0e-5)
+    spline_optimizer = optim.AdamW(motion_spline.parameters(), lr=optimizer_config["spline_lr"], weight_decay=1.0e-5)
     nn_scheduler = create_warmup_cosine_scheduler(
         optimizer=nn_optimizer,
         lr_max=optimizer_config["nn_initial_lr"],
@@ -143,6 +148,11 @@ def run_train_phase(
     indices = torch.arange(num_iters)
     shuffled_indices = indices[torch.randperm(num_iters)]
 
+    # Pre-compute reusable tensors (avoid repeated clone and indexing)
+    events_txy = batch_events_for_train[..., [2, 1, 0]]  # (y,x,t,p) -> (t,x,y), no clone needed
+    polarity = batch_events_for_train[:, 3]  # Pre-extract polarity once
+    t_min_events, t_max_events = torch.min(events_txy[..., 0]), torch.max(events_txy[..., 0])  # Pre-compute time range
+
     # training loop
     early_stopped = False
     actual_iterations = 0
@@ -151,17 +161,15 @@ def run_train_phase(
         # reset optimizer
         nn_optimizer.zero_grad()
         spline_optimizer.zero_grad()
-        
+
         # warp events by neural ode
-        events_train = batch_events.clone() # (y, x, t, p)
-        events_txy = events_train[..., [2, 1, 0, 3]][:, :3] # (y, x, t, p) ——> (t, x, y, p) ——> (t, x, y)
         t_ref = batch_t_ref[idx]
         warped_events_txy = warpper.warp_events(events_txy, t_ref).unsqueeze(0)
 
-        # create image warped event    
+        # create image warped event
         num_iwe, num_events = warped_events_txy.shape[0], warped_events_txy.shape[1]
-        polarity = events_train[:, 3].unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1)
-        warped_events = torch.cat((warped_events_txy[..., [2,1,0]], polarity), dim=2).to(device) # (t, x, y) ——> (y,x,t,p)
+        polarity_expanded = polarity.unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1)
+        warped_events = torch.cat((warped_events_txy[..., [2,1,0]], polarity_expanded), dim=2) # (t,x,y) -> (y,x,t,p)
         
         iwes = tools.imager.create_iwes(
             events=warped_events,
@@ -173,7 +181,8 @@ def run_train_phase(
         grad_loss = 0
         var_loss = 0
         ssl_average_dec_loss = 0
-        
+        smooth_loss = 0
+
         # CMax loss
         if misc.check_key_and_bool(loss_config, "cmax"):
             if num_iwe == 1:
@@ -181,44 +190,56 @@ def run_train_phase(
                 grad_loss = criterions["grad_criterion"](iwes)
             elif num_iwe > 1:
                 raise ValueError("Multiple iwes are not supported")
-        
-        # ssl DEC loss
-        if misc.check_key_and_bool(loss_config, "ssl_dec"):
-            # sample coordinates
+
+        # Shared coordinate sampling for ssl_dec and smooth losses
+        need_sampling = misc.check_key_and_bool(loss_config, "ssl_dec") or misc.check_key_and_bool(loss_config, "smooth")
+        if need_sampling:
+            # Sample coordinates once and reuse for both losses
             events_mask = tools.imager.create_eventmask(warped_events)
-            events_mask = events_mask[0].squeeze(0).to(device)
+            events_mask = events_mask[0].squeeze(0)
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
                 coord_tensor=pixel_coords, mask=events_mask, n=10000
             )
-            t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1).to(device)
+            t_ref_expanded = t_ref * torch.ones(sample_coords.shape[1], device=device).reshape(1,-1,1)
             sample_txy = torch.cat((t_ref_expanded, sample_coords[...,0:2]), dim=2)
-            
-            # get optical flow and coordinate on normalized plane
             sample_flow = warpper.flow_field.forward(sample_txy)
-            sample_flow = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
+
+        # ssl DEC loss
+        if misc.check_key_and_bool(loss_config, "ssl_dec"):
+            # Reuse already computed sample_coords, sample_txy, and sample_flow
+            sample_flow_padded = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
             sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
-            sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow, intrinsic_mat)
-            
-            # differential epipolar constrain
-            t_min, t_max = torch.min(events_txy[..., 0]), torch.max(events_txy[..., 0])
-            interp_t = (t_ref - t_min) / (t_max - t_min)
+            sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow_padded, intrinsic_mat)
+
+            # differential epipolar constrain (use pre-computed time range)
+            interp_t = (t_ref - t_min_events) / (t_max_events - t_min_events)
             lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
             ssl_dec_error, ssl_average_dec_loss = criterions["dec_criterion"](
                 sample_norm_coords, sample_norm_flow, lin_vel, ang_vel
             )
+
+        # Flow smoothness loss
+        if misc.check_key_and_bool(loss_config, "smooth"):
+            # Reuse sample_txy and sample_flow already computed above
+            smooth_loss = criterions["smooth_criterion"](sample_txy, sample_flow[:, :, :2], warpper.flow_field)
                 
         # Total loss
-        alpha, beta, gamma = 1, 1, 2.5   # 2.5
+        alpha, beta, gamma, delta = 1, 1, 2.5, 0.2
         scaled_grad_loss = alpha * grad_loss
         scaled_var_loss = beta * var_loss
         scaled_dec_loss = 0
+        scaled_smooth_loss = 0
+
         if misc.check_key_and_bool(loss_config, "ssl_dec"):
             scaled_dec_loss = gamma * ssl_average_dec_loss
-        
+
+        if misc.check_key_and_bool(loss_config, "smooth"):
+            scaled_smooth_loss = delta * smooth_loss
+
         if(j<=200):
             total_loss = - (scaled_grad_loss + scaled_var_loss)
         else:
-            total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss
+            total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss + scaled_smooth_loss
         
         # step
         total_loss.backward()
@@ -231,9 +252,6 @@ def run_train_phase(
         if use_early_stopping:
             current_loss = total_loss.item()
             if early_stopping.step(current_loss):
-                logger.info(f"Early stopping triggered at iteration {j} for batch {batch_idx}")
-                logger.info(f"Best training loss: {early_stopping.best:.6f}")
-                logger.info(f"Current loss: {current_loss:.6f}")
                 early_stopped = True
                 break
             
@@ -279,10 +297,12 @@ if __name__ == '__main__':
     dec_criterion = DifferentialEpipolarLoss()
     var_criterion = FocusLoss(loss_type="variance", norm="l1")
     grad_criterion = FocusLoss(loss_type="gradient_magnitude", norm="l1")
+    smooth_criterion = SparseFlowSmoothnessLoss()
     criterions = {
-        "grad_criterion": grad_criterion, 
+        "grad_criterion": grad_criterion,
         "var_criterion": var_criterion,
-        "dec_criterion": dec_criterion
+        "dec_criterion": dec_criterion,
+        "smooth_criterion": smooth_criterion
     } 
     
     # event2img converter
@@ -325,8 +345,6 @@ if __name__ == '__main__':
         # prepare data
         batch_events = sample['events'][0].to(device)
         batch_t_min, batch_t_max = torch.min(batch_events[:, 2]), torch.max(batch_events[:, 2])
-        original_times = batch_events[:, 2]
-        logger.debug(f"Original time range: [{original_times.min().item():.6f}, {original_times.max().item():.6f}]")
 
         # reset model
         flow_field = EventFlowINR(model_config).to(device)
@@ -334,19 +352,19 @@ if __name__ == '__main__':
         motion_spline = CubicBsplineVelocityModel().to(device)
         
         # trainer
-        logger.info(f"Training on batch {i}...")
+        # logger.info(f"Training on batch {i}...")
         warpper, motion_spline = run_train_phase(
             config, tools, device,
-            pixel_coords=image_coords, 
+            pixel_coords=image_coords,
             batch_idx=i,
-            batch_events_for_train=batch_events, 
-            warpper=warpper, 
-            motion_spline=motion_spline, 
+            batch_events_for_train=batch_events,
+            warpper=warpper,
+            motion_spline=motion_spline,
             criterions=criterions
         )
         
         # evaluation
-        logger.info(f"Evaluation on batch {i}...")
+        # logger.info(f"Evaluation on batch {i}...")
         run_valid_phase(
             config, tools, device,  
             sample=sample,
