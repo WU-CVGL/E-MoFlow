@@ -6,44 +6,90 @@ import numpy as np
 from pathlib import Path
 
 def pixel_to_normalized_coords(pixel_coords, intrinsic_matrix):
-    assert pixel_coords.shape[0] == 1 and pixel_coords.shape[2] == 3, "The shape of pixel_coords should be (1, n, 3)"
-    assert intrinsic_matrix.shape == (3, 3), "The shape of intrinsic_matrix should be (3, 3)"
+    """
+    Convert pixel coordinates to normalized coordinates.
 
-    fx = intrinsic_matrix[0, 0]  
-    fy = intrinsic_matrix[1, 1]  
-    cx = intrinsic_matrix[0, 2] 
-    cy = intrinsic_matrix[1, 2]
+    Args:
+        pixel_coords: (B, N, 3) tensor of pixel coordinates
+        intrinsic_matrix: (3, 3) or (B, 3, 3) tensor of intrinsic matrices
 
-    x = pixel_coords[0, :, 0]  
-    y = pixel_coords[0, :, 1]  
+    Returns:
+        normalized_coords: (B, N, 3) tensor of normalized coordinates
+    """
+    assert pixel_coords.dim() == 3 and pixel_coords.shape[2] == 3, \
+        f"pixel_coords shape should be (B, N, 3), got {pixel_coords.shape}"
+    assert intrinsic_matrix.shape == (3, 3) or \
+           (intrinsic_matrix.dim() == 3 and intrinsic_matrix.shape[1:] == (3, 3)), \
+        f"intrinsic_matrix shape should be (3, 3) or (B, 3, 3), got {intrinsic_matrix.shape}"
 
-    x_n = (x - cx) / fx
-    y_n = (y - cy) / fy
+    if intrinsic_matrix.dim() == 2:
+        intrinsic_matrix = intrinsic_matrix.unsqueeze(0) # (3, 3) -> (1, 3, 3)
+    
+    # same device
+    device = pixel_coords.device
+    if intrinsic_matrix.device != device:
+        intrinsic_matrix = intrinsic_matrix.to(device)
 
+    # intrinsic parameters (B, )
+    fx = intrinsic_matrix[:, 0, 0]
+    fy = intrinsic_matrix[:, 1, 1]
+    cx = intrinsic_matrix[:, 0, 2]
+    cy = intrinsic_matrix[:, 1, 2]
+
+    # pixel coordinates (B, N)
+    x = pixel_coords[:, :, 0]
+    y = pixel_coords[:, :, 1]
+
+    # Normalize
+    x_n = (x - cx.unsqueeze(1)) / fx.unsqueeze(1)
+    y_n = (y - cy.unsqueeze(1)) / fy.unsqueeze(1)
+
+    # Stack to create normalized coordinates: (B, N, 3)
     ones = torch.ones_like(x_n)
-    normalized_coords = torch.stack([x_n, y_n, ones], dim=1)  
-    normalized_coords = normalized_coords.unsqueeze(0)  
+    normalized_coords = torch.stack([x_n, y_n, ones], dim=2)
 
     return normalized_coords
 
 def flow_to_normalized_coords(image_plane_flow, intrinsic_matrix):
-    assert image_plane_flow.shape[0] == 1 and image_plane_flow.shape[2] == 3, "The shape of pixel_coords should be (1, n, 3)"
-    assert intrinsic_matrix.shape == (3, 3), "The shape of intrinsic_matrix should be (3, 3)"
+    """
+    Convert image plane flow to normalized coordinates.
 
-    fx = intrinsic_matrix[0, 0]  
-    fy = intrinsic_matrix[1, 1]  
-    cx = intrinsic_matrix[0, 2]  
-    cy = intrinsic_matrix[1, 2]  
+    Args:
+        image_plane_flow: (B, N, 3) tensor of image plane flow
+        intrinsic_matrix: (3, 3) or (B, 3, 3) tensor of intrinsic matrices
 
-    flow_x = image_plane_flow[0, :, 0]  
-    flow_y = image_plane_flow[0, :, 1]  
+    Returns:
+        normalized_plane_flow: (B, N, 3) tensor of normalized plane flow
+    """
+    assert image_plane_flow.dim() == 3 and image_plane_flow.shape[2] == 3, \
+        f"image_plane_flow shape should be (B, N, 3), got {image_plane_flow.shape}"
+    assert intrinsic_matrix.shape == (3, 3) or \
+           (intrinsic_matrix.dim() == 3 and intrinsic_matrix.shape[1:] == (3, 3)), \
+        f"intrinsic_matrix shape should be (3, 3) or (B, 3, 3), got {intrinsic_matrix.shape}"
 
-    flow_x_n = flow_x / fx
-    flow_y_n = flow_y / fy
+    if intrinsic_matrix.dim() == 2:
+        intrinsic_matrix = intrinsic_matrix.unsqueeze(0) # (3, 3) -> (1, 3, 3)
+    
+    # same device
+    device = image_plane_flow.device
+    if intrinsic_matrix.device != device:
+        intrinsic_matrix = intrinsic_matrix.to(device)
 
-    ones = torch.zeros_like(flow_x_n)
-    normalized_plane_flow = torch.stack([flow_x_n, flow_y_n, ones], dim=1)  
-    normalized_plane_flow = normalized_plane_flow.unsqueeze(0)  
+    # intrinsic parameters (B, )
+    fx = intrinsic_matrix[:, 0, 0]
+    fy = intrinsic_matrix[:, 1, 1]
+
+    # flow (B, N)
+    flow_x = image_plane_flow[:, :, 0]
+    flow_y = image_plane_flow[:, :, 1]
+
+    # Normalize (B, N)
+    flow_x_n = flow_x / fx.unsqueeze(1)
+    flow_y_n = flow_y / fy.unsqueeze(1)
+
+    # Stack to create normalized flow: (B, N, 3)
+    zeros = torch.zeros_like(flow_x_n)
+    normalized_plane_flow = torch.stack([flow_x_n, flow_y_n, zeros], dim=2)
 
     return normalized_plane_flow
 
