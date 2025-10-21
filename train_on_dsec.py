@@ -67,10 +67,9 @@ def run_valid_phase(
     submission_flow_save_dir = os.path.join(config["logger"]["results_dir"], "submission_pred_flow")
         
     with torch.no_grad():
-        # warp events by trained flow (no clone needed in validation)
-        valid_events_txy = batch_events[:, [2, 1, 0]]  # (y,x,t,p) -> (t,x,y), single indexing
-        valid_polarity = batch_events[:, 3]  # Extract polarity once
-
+        # warp events by trained flow
+        valid_events_txy = batch_events[:, [2, 1, 0]] 
+        valid_polarity = batch_events[:, 3] 
         valid_ref = warpper.get_reference_time(valid_events_txy, "max")
         warped_valid_events_txy = warpper.warp_events(valid_events_txy, valid_ref).unsqueeze(0)
 
@@ -84,22 +83,20 @@ def run_valid_phase(
         tools.viz.update_save_dir(pred_iwe_save_dir)
         tools.viz.visualize_image(valid_warped_iwe.squeeze(0), file_prefix="pred_iwe_")
 
-        # predict optical flow (reuse already extracted time values)
+        # predict optical flow
         t_start = torch.min(valid_events_txy[:, 0])
         t_end = torch.max(valid_events_txy[:, 0])
         tools.time_analyzer.start_valid()
         pred_flow = flow_calculator.integrate_flow(warpper.flow_field, t_start, t_end).unsqueeze(0) # [B,2,H,W]
         tools.time_analyzer.end_valid()
 
-        # Convert to CPU/numpy once for all subsequent operations
+        # visualize optical flow
         pred_flow_cpu = pred_flow.squeeze(0).cpu()
         batch_events_cpu = batch_events.cpu().numpy()
-
-        # visualize optical flow
         tools.viz.update_save_dir(pred_flow_save_dir)
         tools.viz.visualize_optical_flow_on_event_mask(pred_flow_cpu.numpy(), batch_events_cpu, file_prefix="pred_flow_masked_")
 
-        # save 16-bit optical flow for dsec eval (reuse pred_flow_cpu to avoid re-conversion)
+        # save 16-bit optical flow for dsec eval
         tools.viz.update_save_dir(submission_flow_save_dir)
         flow = flow_proc.scale_optical_flow(pred_flow_cpu, 60).numpy()
         file_index = sample['file_index'].item()
@@ -131,7 +128,7 @@ def run_train_phase(
         lr_max=optimizer_config["nn_initial_lr"],
         lr_min=optimizer_config["nn_final_lr"],
         total_steps=num_iters,
-        warmup_steps=250
+        warmup_steps=optimizer_config["warmup_steps"]
     )
     if use_early_stopping:
         early_stopping = EarlyStopping(
@@ -148,10 +145,10 @@ def run_train_phase(
     indices = torch.arange(num_iters)
     shuffled_indices = indices[torch.randperm(num_iters)]
 
-    # Pre-compute reusable tensors (avoid repeated clone and indexing)
-    events_txy = batch_events_for_train[..., [2, 1, 0]]  # (y,x,t,p) -> (t,x,y), no clone needed
-    polarity = batch_events_for_train[:, 3]  # Pre-extract polarity once
-    t_min_events, t_max_events = torch.min(events_txy[..., 0]), torch.max(events_txy[..., 0])  # Pre-compute time range
+    # Pre-compute reusable tensors for training
+    events_txy = batch_events_for_train[..., [2, 1, 0]]  # (y,x,t,p) -> (t,x,y)
+    polarity = batch_events_for_train[:, 3]
+    t_min_events, t_max_events = torch.min(events_txy[..., 0]), torch.max(events_txy[..., 0])
 
     # training loop
     early_stopped = False
@@ -170,7 +167,6 @@ def run_train_phase(
         num_iwe, num_events = warped_events_txy.shape[0], warped_events_txy.shape[1]
         polarity_expanded = polarity.unsqueeze(0).expand(num_iwe, num_events).unsqueeze(-1)
         warped_events = torch.cat((warped_events_txy[..., [2,1,0]], polarity_expanded), dim=2) # (t,x,y) -> (y,x,t,p)
-        
         iwes = tools.imager.create_iwes(
             events=warped_events,
             method="bilinear_vote",
@@ -178,6 +174,7 @@ def run_train_phase(
             blur=True
         ) # [n,h,w] n should be one
         
+        # loss
         grad_loss = 0
         var_loss = 0
         ssl_average_dec_loss = 0
@@ -191,10 +188,9 @@ def run_train_phase(
             elif num_iwe > 1:
                 raise ValueError("Multiple iwes are not supported")
 
-        # Shared coordinate sampling for ssl_dec and smooth losses
+        # sampling sparse coordinates for ssl_dec and smooth losses
         need_sampling = misc.check_key_and_bool(loss_config, "ssl_dec") or misc.check_key_and_bool(loss_config, "smooth")
         if need_sampling:
-            # Sample coordinates once and reuse for both losses
             events_mask = tools.imager.create_eventmask(warped_events)
             events_mask = events_mask[0].squeeze(0)
             sample_coords = pixel2cam_converter.sample_sparse_coordinates(
@@ -206,12 +202,9 @@ def run_train_phase(
 
         # ssl DEC loss
         if misc.check_key_and_bool(loss_config, "ssl_dec"):
-            # Reuse already computed sample_coords, sample_txy, and sample_flow
             sample_flow_padded = torch.nn.functional.pad(sample_flow, (0, 1), mode='constant', value=0)
             sample_norm_coords = flow_proc.pixel_to_normalized_coords(sample_coords, intrinsic_mat)
             sample_norm_flow = flow_proc.flow_to_normalized_coords(sample_flow_padded, intrinsic_mat)
-
-            # differential epipolar constrain (use pre-computed time range)
             interp_t = (t_ref - t_min_events) / (t_max_events - t_min_events)
             lin_vel, ang_vel = motion_spline.forward(interp_t.unsqueeze(0))
             ssl_dec_error, ssl_average_dec_loss = criterions["dec_criterion"](
@@ -220,11 +213,10 @@ def run_train_phase(
 
         # Flow smoothness loss
         if misc.check_key_and_bool(loss_config, "smooth"):
-            # Reuse sample_txy and sample_flow already computed above
             smooth_loss = criterions["smooth_criterion"](sample_txy, sample_flow[:, :, :2], warpper.flow_field)
                 
         # Total loss
-        alpha, beta, gamma, delta = 1, 1, 2.5, 0.2
+        alpha, beta, gamma, delta = 1, 1, 2.5, 0.15
         scaled_grad_loss = alpha * grad_loss
         scaled_var_loss = beta * var_loss
         scaled_dec_loss = 0
@@ -232,14 +224,10 @@ def run_train_phase(
 
         if misc.check_key_and_bool(loss_config, "ssl_dec"):
             scaled_dec_loss = gamma * ssl_average_dec_loss
-
         if misc.check_key_and_bool(loss_config, "smooth"):
             scaled_smooth_loss = delta * smooth_loss
 
-        if(j<=200):
-            total_loss = - (scaled_grad_loss + scaled_var_loss)
-        else:
-            total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss + scaled_smooth_loss
+        total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss + scaled_smooth_loss
         
         # step
         total_loss.backward()
