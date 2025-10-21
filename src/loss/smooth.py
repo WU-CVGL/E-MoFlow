@@ -59,6 +59,15 @@ class SparseFlowSmoothnessLoss(nn.Module):
         self.epsilon = epsilon
 
     def forward(self, sample_coords, sample_flow, flow_field):
+        """
+        Args:
+            sample_coords: [B, N, 3] sampled coordinates (t, x, y)
+            sample_flow: [B, N, 2] flow at sampled coordinates
+            flow_field: flow field model to query
+
+        Returns:
+            smoothness_loss: scalar mean smoothness loss
+        """
         B, N, _ = sample_coords.shape
         device = sample_coords.device
 
@@ -66,21 +75,21 @@ class SparseFlowSmoothnessLoss(nn.Module):
         delta = 1.0  # 1 pixel offset
 
         # Compute neighboring coordinates: right (+x) and down (+y)
-        coords_right = sample_coords.clone()  # [1, N, 3]
-        coords_right[..., 1] += delta  # x + delta 
+        coords_right = sample_coords.clone()  # [B, N, 3]
+        coords_right[..., 1] += delta  # x + delta
 
-        coords_down = sample_coords.clone()  # [1, N, 3]
-        coords_down[..., 2] += delta  # y + delta 
+        coords_down = sample_coords.clone()  # [B, N, 3]
+        coords_down[..., 2] += delta  # y + delta
 
-        # Query flow at neighboring points
-        flow_right = flow_field(coords_right)  # [1, N, 2]
-        flow_down = flow_field(coords_down)    # [1, N, 2]
+        # Query flow at neighboring points (batched)
+        flow_right = flow_field(coords_right)  # [B, N, 2]
+        flow_down = flow_field(coords_down)    # [B, N, 2]
 
         # Compute finite differences: ∂f/∂x ≈ (f(x+Δx) - f(x)) / Δx
-        grad_x = (flow_right - sample_flow) / delta  # [1, N, 2]
-        grad_y = (flow_down - sample_flow) / delta   # [1, N, 2]
+        grad_x = (flow_right - sample_flow) / delta  # [B, N, 2]
+        grad_y = (flow_down - sample_flow) / delta   # [B, N, 2]
 
         # L1 norm of gradients: |∇_x V| + |∇_y V|
-        smoothness = torch.abs(grad_x) + torch.abs(grad_y)  # [1, N, 2]
+        smoothness = torch.abs(grad_x) + torch.abs(grad_y)  # [B, N, 2]
 
         return torch.mean(smoothness)
