@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import torch
 import random
 import numpy as np
@@ -11,6 +12,7 @@ from typing import List, Union
 
 from src.utils.logger import get_logger
 logger = get_logger()
+
 
 def load_optical_flow(flow_path):
     """Load optical flow map and return the horizontal and vertical component tensors"""
@@ -26,6 +28,7 @@ def load_optical_flow(flow_path):
     
     return U, V, mask
 
+
 def save_flow(file_path: Path, flow: np.ndarray):
     """Save the optical flow as a 16-bit PNG."""
     height, width = flow.shape[0], flow.shape[1]
@@ -34,6 +37,7 @@ def save_flow(file_path: Path, flow: np.ndarray):
     flow_16bit[..., 1] = (flow[..., 1] * 128 + 2**15).astype(np.uint16)  # x-component
     flow_16bit[..., 2] = 1
     imageio.imwrite(str(file_path), flow_16bit, format='PNG-FI')
+
 
 def fix_random_seed(seed_idx=42) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed_idx)
@@ -47,12 +51,14 @@ def fix_random_seed(seed_idx=42) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 def load_camera_intrinsic(
     file_path: str
 ):
     K = np.loadtxt(file_path)
     K_tensor = torch.from_numpy(K).float()
     return K_tensor
+
 
 def load_camera_pose(
     file_path: str
@@ -61,12 +67,14 @@ def load_camera_pose(
     camera_pose_tensor = torch.from_numpy(camera_pose).float()
     return camera_pose_tensor
 
+
 def load_time_stamps(
     file_path: str
 ):
     timestamps = np.loadtxt(file_path)[:,0]
     timestamps_tensor = torch.from_numpy(timestamps).float()
     return timestamps_tensor
+
 
 def get_sorted_txt_paths(folder_path: str) -> list:
     """
@@ -88,6 +96,7 @@ def get_sorted_txt_paths(folder_path: str) -> list:
     txt_paths = [os.path.join(folder_path, f) for f in txt_files]
     
     return txt_paths
+
 
 def get_filenames(file_list: List[str], indices: Union[List[int], int]) -> List[str]:
     """
@@ -119,7 +128,8 @@ def get_filenames(file_list: List[str], indices: Union[List[int], int]) -> List[
             raise ValueError("Indices must be either a single integer or a list of two integers [start, end]")
     except IndexError as e:
         raise IndexError(f"Index out of range. List length is {len(file_list)}")
-    
+
+
 def check_file_utils(filename: str) -> bool:
     """Return True if the file exists.
 
@@ -149,26 +159,30 @@ def check_key_and_bool(config: dict, key: str) -> bool:
     """
     return key in config.keys() and config[key]
 
-def save_metric_as_text(
-    flow_error_dict: dict, dir: str, fname: str = "metric.txt"
+
+def save_metric_as_json(
+    flow_error_dict: dict, dir: str, fname: str = "metric.json"
+):  
+    output_json_path = os.path.join(dir, fname)
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(flow_error_dict, f, ensure_ascii=False, indent=4)
+
+   
+def save_time_log_as_json(
+    time_stats_dict: dict, dir: str, fname: str = "time_stats.json"
 ):
-    save_file_name = os.path.join(dir, fname)
-    with open(save_file_name, "a") as f:
-        f.write(str(flow_error_dict) + "\n")
-        
-def save_time_log_as_text(
-    time_stats_dict: dict, dir: str, fname: str = "time_stats.txt"
-):
-    save_file_name = os.path.join(dir, fname)
-    with open(save_file_name, "a") as f:
-        f.write(str(time_stats_dict) + "\n")
-        
+    output_json_path = os.path.join(dir, fname)
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(time_stats_dict, f, ensure_ascii=False, indent=4)
+
+    
 def save_theseus_result_as_text(
     theseus_result: dict, dir: str, fname: str = "theseus_result.txt"
 ):
     save_file_name = os.path.join(dir, fname)
     with open(save_file_name, "a") as f:
         f.write(str(theseus_result) + "\n")
+
 
 def plot_velocity(lin_vel_array, ang_vel_array, save_dir, prefix_filename):
 
@@ -202,7 +216,8 @@ def plot_velocity(lin_vel_array, ang_vel_array, save_dir, prefix_filename):
 
     _plot_single(lin_vel_array, "linear")
     _plot_single(ang_vel_array, "angular")
-    
+
+
 def visualize_velocities(gt_lin_vel, gt_ang_vel, eval_lin_vel, eval_ang_vel, t_eval):
     # tensor2array
     def to_numpy(tensor):
