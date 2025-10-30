@@ -18,8 +18,8 @@ from src.utils import (
 from src.loader.DSEC.loader import DSECSequence, sequence_collate_fn
 
 from src.loss.focus import FocusLoss
-from src.loss.smooth import SparseFlowSmoothnessLoss
 from src.loss.dec import DifferentialEpipolarLoss
+from src.loss.smooth import SparseFlowSmoothnessLoss
 
 from src.model.warp import NeuralODEWarpV2
 from src.model.eventflow import EventFlowINR, DenseFlowExtractor
@@ -189,7 +189,8 @@ def run_train_phase(
                 raise ValueError("Multiple iwes are not supported")
 
         # sampling sparse coordinates for ssl_dec and smooth losses
-        need_sampling = misc.check_key_and_bool(loss_config, "ssl_dec") or misc.check_key_and_bool(loss_config, "smooth")
+        need_sampling = any(misc.check_key_and_bool(loss_config, key) 
+                            for key in ["ssl_dec", "smooth"])
         if need_sampling:
             events_mask = tools.imager.create_eventmask(warped_events)
             events_mask = events_mask[0].squeeze(0)
@@ -221,12 +222,10 @@ def run_train_phase(
         scaled_var_loss = beta * var_loss
         scaled_dec_loss = 0
         scaled_smooth_loss = 0
-
         if misc.check_key_and_bool(loss_config, "ssl_dec"):
             scaled_dec_loss = gamma * ssl_average_dec_loss
         if misc.check_key_and_bool(loss_config, "smooth"):
             scaled_smooth_loss = delta * smooth_loss
-
         total_loss = - (scaled_grad_loss + scaled_var_loss) + scaled_dec_loss + scaled_smooth_loss
         
         # step
@@ -367,4 +366,4 @@ if __name__ == '__main__':
         
     tools.early_stopping_stats.save_to_file(config["logger"]["results_dir"])
     time_stats = tools.time_analyzer.get_statistics()  
-    misc.save_time_log_as_text(time_stats, config["logger"]["results_dir"])
+    misc.save_time_log_as_json(time_stats, config["logger"]["results_dir"])
