@@ -12,7 +12,7 @@ data:
     pin_memory: True
 
 logger:
-  project: dsec_no_es_test_before_release
+  project: dsec_full_model_exp
   expname: thun_01_b
   results_dir: ./outputs/${project}/${expname}
   model_weight_path: ./weights/${project}_${expname}.pth
@@ -21,16 +21,20 @@ loss:
   cmax: True
   ssl_dec: True
   sl_dec: False
+  smooth: True
 
 model:
-  pos_encode: False
-  multires: 2
+  pos_encode: True
+  multires: 6
+  nn_depth: 8
+  nn_width: 256
 
 optimizer:
-  nn_initial_lr: 1.0e-4
-  nn_final_lr: 1.0e-6
+  nn_initial_lr: 2.0e-3
+  nn_final_lr: 1.0e-7
   spline_lr: 1.0e-3
-  num_iters: 10000
+  num_iters: 1000
+  warmup_steps: 100
 
 warp:
   tref_setting: "random"
@@ -41,7 +45,7 @@ warp:
 
 early_stopping:
   enabled: False
-  burn_in_steps: 300     
+  burn_in_steps: 300   
   patience: 45          
   min_delta: 1.0e-3       
   percentage: false  
