@@ -16,4 +16,3 @@ for cmd in "${commands[@]}"; do
 done
 
 wait
-
